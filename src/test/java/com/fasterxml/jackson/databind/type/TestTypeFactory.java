@@ -13,7 +13,7 @@ import com.fasterxml.jackson.databind.*;
  */
 public class TestTypeFactory
     extends BaseMapTest
-{    
+{
     /*
     /**********************************************************
     /* Helper types
@@ -155,12 +155,11 @@ public class TestTypeFactory
      * Test for verifying that parametric types can be constructed
      * programmatically
      */
-    @SuppressWarnings("deprecation")
     public void testParametricTypes()
     {
         TypeFactory tf = TypeFactory.defaultInstance();
         // first, simple class based
-        JavaType t = tf.constructParametrizedType(ArrayList.class, Collection.class, String.class); // ArrayList<String>
+        JavaType t = tf.constructParametricType(ArrayList.class, String.class); // ArrayList<String>
         assertEquals(CollectionType.class, t.getClass());
         JavaType strC = tf.constructType(String.class);
         assertEquals(1, t.containedTypeCount());
@@ -168,7 +167,7 @@ public class TestTypeFactory
         assertNull(t.containedType(1));
 
         // Then using JavaType
-        JavaType t2 = tf.constructParametrizedType(Map.class, Map.class, strC, t); // Map<String,ArrayList<String>>
+        JavaType t2 = tf.constructParametricType(Map.class, strC, t); // Map<String,ArrayList<String>>
         // should actually produce a MapType
         assertEquals(MapType.class, t2.getClass());
         assertEquals(2, t2.containedTypeCount());
@@ -176,30 +175,40 @@ public class TestTypeFactory
         assertEquals(t, t2.containedType(1));
         assertNull(t2.containedType(2));
 
-        // and then custom generic type as well
-        JavaType custom = tf.constructParametrizedType(SingleArgGeneric.class, SingleArgGeneric.class,
-                String.class);
+        // Then using TypeBindings
+        JavaType t3 = tf.constructParametricType(HashSet.class, t.getBindings()); // HashSet<String>
+        assertEquals(CollectionType.class, t3.getClass());
+        assertEquals(1, t3.containedTypeCount());
+        assertEquals(strC, t3.containedType(0));
+        assertNull(t3.containedType(1));
+
+        // Then custom generic type as well
+        JavaType custom = tf.constructParametricType(SingleArgGeneric.class, String.class);
         assertEquals(SimpleType.class, custom.getClass());
         assertEquals(1, custom.containedTypeCount());
         assertEquals(strC, custom.containedType(0));
         assertNull(custom.containedType(1));
 
-        // should also be able to access variable name:
-        assertEquals("X", custom.containedTypeName(0));
+        // and then custom generic type from TypeBindings
+        JavaType custom2 = tf.constructParametricType(SingleArgGeneric.class, t.getBindings());
+        assertEquals(SimpleType.class, custom2.getClass());
+        assertEquals(1, custom2.containedTypeCount());
+        assertEquals(strC, custom2.containedType(0));
+        assertNull(custom2.containedType(1));
 
         // And finally, ensure that we can't create invalid combinations
         try {
             // Maps must take 2 type parameters, not just one
-            tf.constructParametrizedType(Map.class, Map.class, strC);
+            tf.constructParametricType(Map.class, strC);
         } catch (IllegalArgumentException e) {
-            verifyException(e, "Can not create TypeBindings for class java.util.Map");
+            verifyException(e, "Cannot create TypeBindings for class java.util.Map");
         }
 
         try {
             // Type only accepts one type param
-            tf.constructParametrizedType(SingleArgGeneric.class, SingleArgGeneric.class, strC, strC);
+            tf.constructParametricType(SingleArgGeneric.class, strC, strC);
         } catch (IllegalArgumentException e) {
-            verifyException(e, "Can not create TypeBindings for class ");
+            verifyException(e, "Cannot create TypeBindings for class ");
         }
     }
 
@@ -278,10 +287,11 @@ public class TestTypeFactory
     public void testCollections()
     {
         // Ok, first: let's test what happens when we pass 'raw' Collection:
-        TypeFactory tf = TypeFactory.defaultInstance();
+        final TypeFactory tf = TypeFactory.defaultInstance();
         JavaType t = tf.constructType(ArrayList.class);
         assertEquals(CollectionType.class, t.getClass());
         assertSame(ArrayList.class, t.getRawClass());
+        assertSame(Object.class, ((CollectionType) t).getContentType().getRawClass());
 
         // And then the proper way
         t = tf.constructType(new TypeReference<ArrayList<String>>() { });
@@ -298,7 +308,19 @@ public class TestTypeFactory
         assertEquals(CollectionType.class, t.getClass());
         assertSame(String.class, ((CollectionType) t).getContentType().getRawClass());
     }
-    
+
+    // [databind#2796]
+    public void testCollectionsWithBindings()
+    {
+        final TypeFactory tf = TypeFactory.defaultInstance();
+        TypeBindings tb = TypeBindings.create(Set.class, new JavaType[] {
+                tf.constructType(String.class) });
+        JavaType t = tf.constructType(ArrayList.class, tb);
+        assertEquals(CollectionType.class, t.getClass());
+        assertSame(ArrayList.class, t.getRawClass());
+        assertSame(String.class, ((CollectionType) t).getContentType().getRawClass());
+    }
+
     // since 2.7
     public void testCollectionTypesRefined()
     {
@@ -383,10 +405,6 @@ public class TestTypeFactory
         assertEquals(Integer.class, subtype.getContentType().getContentType().getRawClass());
 
         // but with refinement, should have non-null super class
-        // 20-Oct-2015, tatu: For now refinement does not faithfully replicate the
-        //    structure, it only retains most important information. Here it means
-        //    that actually existing super-classes are skipped, and only original
-        //    type is linked as expected
 
         JavaType superType = subtype.getSuperClass();
         assertNotNull(superType);
@@ -395,6 +413,25 @@ public class TestTypeFactory
         assertEquals(String.class, superType.getKeyType().getRawClass());
         assertEquals(List.class, superType.getContentType().getRawClass());
         assertEquals(Integer.class, superType.getContentType().getContentType().getRawClass());
+    }
+
+    public void testTypeGeneralization()
+    {
+        TypeFactory tf = newTypeFactory();
+        MapType t = tf.constructMapType(HashMap.class, String.class, Long.class);
+        JavaType superT = tf.constructGeneralizedType(t, Map.class);
+        assertEquals(String.class, superT.getKeyType().getRawClass());
+        assertEquals(Long.class, superT.getContentType().getRawClass());
+
+        assertSame(t, tf.constructGeneralizedType(t, HashMap.class));
+
+        // plus check there is super/sub relationship
+        try {
+            tf.constructGeneralizedType(t, TreeMap.class);
+            fail("Should not pass");
+        } catch (IllegalArgumentException e) {
+            verifyException(e, "not a super-type of");
+        }
     }
 
     public void testMapTypesRaw()

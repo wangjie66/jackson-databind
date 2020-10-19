@@ -1,6 +1,5 @@
 package com.fasterxml.jackson.databind.ser.std;
 
-import java.lang.reflect.Type;
 import java.io.IOException;
 
 import com.fasterxml.jackson.core.*;
@@ -17,7 +16,6 @@ import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
  * more exotic types (java.lang.Void).
  */
 @JacksonStdImpl
-@SuppressWarnings("serial")
 public class NullSerializer
     extends StdSerializer<Object>
 {
@@ -34,7 +32,7 @@ public class NullSerializer
      * Although this method should rarely get called, for convenience we should override
      * it, and handle it same way as "natural" types: by serializing exactly as is,
      * without type decorations. The most common possible use case is that of delegation
-     * by JSON filter; caller can not know what kind of serializer it gets handed.
+     * by JSON filter; caller cannot know what kind of serializer it gets handed.
      */
     @Override
     public void serializeWithType(Object value, JsonGenerator gen, SerializerProvider serializers,
@@ -43,12 +41,7 @@ public class NullSerializer
     {
         gen.writeNull();
     }
-    
-    @Override
-    public JsonNode getSchema(SerializerProvider provider, Type typeHint) throws JsonMappingException {
-        return createSchemaNode("null");
-    }
-    
+
     @Override
     public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws JsonMappingException {
         visitor.expectNullFormat(typeHint);

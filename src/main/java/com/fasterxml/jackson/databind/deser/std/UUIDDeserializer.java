@@ -12,8 +12,6 @@ import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 
 public class UUIDDeserializer extends FromStringDeserializer<UUID>
 {
-    private static final long serialVersionUID = 1L;
-
     final static int[] HEX_DIGITS = new int[127];
     static {
         Arrays.fill(HEX_DIGITS, -1);
@@ -26,15 +24,19 @@ public class UUIDDeserializer extends FromStringDeserializer<UUID>
 
     public UUIDDeserializer() { super(UUID.class); }
 
+    @Override // since 2.12
+    public Object getEmptyValue(DeserializationContext ctxt) {
+        return new UUID(0L, 0L);
+    }
+
     @Override
     protected UUID _deserialize(String id, DeserializationContext ctxt) throws IOException
     {
         // Adapted from java-uuid-generator (https://github.com/cowtowncoder/java-uuid-generator)
         // which is 5x faster than UUID.fromString(value), as oper "ManualReadPerfWithUUID"
         if (id.length() != 36) {
-            /* 14-Sep-2013, tatu: One trick we do allow, Base64-encoding, since we know
-             *   length it must have...
-             */
+            // 14-Sep-2013, tatu: One trick we do allow, Base64-encoding, since we know
+            //   length it must have...
             if (id.length() == 24) {
                 byte[] stuff = Base64Variants.getDefaultVariant().decode(id);
                 return _fromBytes(stuff, ctxt);
@@ -62,15 +64,14 @@ public class UUIDDeserializer extends FromStringDeserializer<UUID>
 
         return new UUID(hi, lo);
     }
-    
+
     @Override
     protected UUID _deserializeEmbedded(Object ob, DeserializationContext ctxt) throws IOException
     {
         if (ob instanceof byte[]) {
             return _fromBytes((byte[]) ob, ctxt);
         }
-        super._deserializeEmbedded(ob, ctxt);
-        return null; // never gets here
+        return super._deserializeEmbedded(ob, ctxt);
     }
 
     private UUID _badFormat(String uuidStr, DeserializationContext ctxt)

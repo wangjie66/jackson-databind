@@ -89,7 +89,7 @@ public class NestedTypes1604Test extends BaseMapTest
         }
     }
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = newJsonMapper();
     
     public void testIssue1604Simple() throws Exception
     {

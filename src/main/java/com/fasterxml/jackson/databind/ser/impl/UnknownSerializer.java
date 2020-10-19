@@ -1,15 +1,14 @@
 package com.fasterxml.jackson.databind.ser.impl;
 
 import java.io.IOException;
-import java.lang.reflect.Type;
 
 import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.type.WritableTypeId;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
 import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 
-@SuppressWarnings("serial")
 public class UnknownSerializer
     extends StdSerializer<Object>
 {
@@ -17,11 +16,8 @@ public class UnknownSerializer
         super(Object.class);
     }
 
-    /**
-     * @since 2.6
-     */
     public UnknownSerializer(Class<?> cls) {
-        super(cls, false);
+        super(cls);
     }
     
     @Override
@@ -32,19 +28,20 @@ public class UnknownSerializer
             failForEmpty(provider, value);
         }
         // But if it's fine, we'll just output empty JSON Object:
-        gen.writeStartObject();
+        gen.writeStartObject(value, 0);
         gen.writeEndObject();
     }
 
     @Override
-    public final void serializeWithType(Object value, JsonGenerator gen, SerializerProvider provider,
+    public final void serializeWithType(Object value, JsonGenerator gen, SerializerProvider ctxt,
             TypeSerializer typeSer) throws IOException
     {
-        if (provider.isEnabled(SerializationFeature.FAIL_ON_EMPTY_BEANS)) {
-            failForEmpty(provider, value);
+        if (ctxt.isEnabled(SerializationFeature.FAIL_ON_EMPTY_BEANS)) {
+            failForEmpty(ctxt, value);
         }
-        typeSer.writeTypePrefixForObject(value, gen);
-        typeSer.writeTypeSuffixForObject(value, gen);
+        WritableTypeId typeIdDef = typeSer.writeTypePrefix(gen, ctxt,
+                typeSer.typeId(value, JsonToken.START_OBJECT));
+        typeSer.writeTypeSuffix(gen, ctxt, typeIdDef);
     }
 
     @Override
@@ -52,11 +49,6 @@ public class UnknownSerializer
         return true;
     }
 
-    @Override
-    public JsonNode getSchema(SerializerProvider provider, Type typeHint) throws JsonMappingException {
-        return null;
-    }
-    
     @Override
     public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint)
         throws JsonMappingException
@@ -66,7 +58,8 @@ public class UnknownSerializer
 
     protected void failForEmpty(SerializerProvider prov, Object value)
             throws JsonMappingException {
-        prov.reportMappingProblem("No serializer found for class %s and no properties discovered to create BeanSerializer (to avoid exception, disable SerializationFeature.FAIL_ON_EMPTY_BEANS)",
-                value.getClass().getName());
+        prov.reportBadDefinition(handledType(), String.format(
+                "No serializer found for class %s and no properties discovered to create BeanSerializer (to avoid exception, disable SerializationFeature.FAIL_ON_EMPTY_BEANS)",
+                value.getClass().getName()));
     }
 }

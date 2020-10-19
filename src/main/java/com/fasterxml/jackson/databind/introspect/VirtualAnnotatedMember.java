@@ -3,6 +3,7 @@ package com.fasterxml.jackson.databind.introspect;
 import java.lang.reflect.*;
 
 import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.util.ClassUtil;
 
 /**
  * Placeholder used by virtual properties as placeholder for
@@ -37,15 +38,6 @@ public class VirtualAnnotatedMember extends AnnotatedMember
         _declaringClass = declaringClass;
         _type = type;
         _name = name;
-    }
-
-    /**
-     * @deprecated Since 2.8
-     */
-    @Deprecated
-    public VirtualAnnotatedMember(TypeResolutionContext typeContext, Class<?> declaringClass,
-            String name, Class<?> rawType) {
-        this(typeContext, declaringClass, name, typeContext.resolveType(rawType));
     }
 
     @Override
@@ -92,12 +84,12 @@ public class VirtualAnnotatedMember extends AnnotatedMember
 
     @Override
     public void setValue(Object pojo, Object value) throws IllegalArgumentException {
-        throw new IllegalArgumentException("Can not set virtual property '"+_name+"'");
+        throw new IllegalArgumentException("Cannot set virtual property '"+_name+"'");
     }
 
     @Override
     public Object getValue(Object pojo) throws IllegalArgumentException {
-        throw new IllegalArgumentException("Can not get virtual property '"+_name+"'");
+        throw new IllegalArgumentException("Cannot get virtual property '"+_name+"'");
     }
     
     /*
@@ -105,10 +97,6 @@ public class VirtualAnnotatedMember extends AnnotatedMember
     /* Extended API, generic
     /**********************************************************
      */
-
-    public String getFullName() {
-        return getDeclaringClass().getName() + "#" + getName();
-    }
 
     public int getAnnotationCount() { return 0; }
 
@@ -120,7 +108,9 @@ public class VirtualAnnotatedMember extends AnnotatedMember
     @Override
     public boolean equals(Object o) {
         if (o == this) return true;
-        if (o == null || o.getClass() != getClass()) return false;
+        if (!ClassUtil.hasClass(o, getClass())) {
+            return false;
+        }
         VirtualAnnotatedMember other = (VirtualAnnotatedMember) o;
         return (other._declaringClass == _declaringClass)
                 && other._name.equals(_name);
@@ -128,6 +118,6 @@ public class VirtualAnnotatedMember extends AnnotatedMember
 
     @Override
     public String toString() {
-        return "[field "+getFullName()+"]";
+        return "[virtual "+getFullName()+"]";
     }
 }

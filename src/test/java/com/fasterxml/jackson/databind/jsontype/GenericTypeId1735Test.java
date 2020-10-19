@@ -3,6 +3,7 @@ package com.fasterxml.jackson.databind.jsontype;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
 
 // for [databind#1735]:
 public class GenericTypeId1735Test extends BaseMapTest
@@ -44,8 +45,9 @@ public class GenericTypeId1735Test extends BaseMapTest
 "{'w':{'type':'"+NEF_CLASS+"'}}"),
                     Wrapper1735.class);
             fail("Should not pass");
-        } catch (JsonMappingException e) {
-            verifyException(e, "not subtype of");
+        } catch (InvalidTypeIdException e) {
+            verifyException(e, "could not resolve type id");
+            verifyException(e, "not a subtype");
         }
     }
 
@@ -57,8 +59,9 @@ public class GenericTypeId1735Test extends BaseMapTest
 "{'w':{'type':'java.util.HashMap<java.lang.String,java.lang.String>'}}"),
                     Wrapper1735.class);
             fail("Should not pass");
-        } catch (JsonMappingException e) {
-            verifyException(e, "not subtype of");
+        } catch (InvalidTypeIdException e) {
+            verifyException(e, "could not resolve type id");
+            verifyException(e, "not a subtype");
         }
     }
 }

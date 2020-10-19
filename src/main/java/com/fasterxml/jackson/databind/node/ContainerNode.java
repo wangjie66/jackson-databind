@@ -15,6 +15,8 @@ public abstract class ContainerNode<T extends ContainerNode<T>>
     extends BaseJsonNode
     implements JsonNodeCreator
 {
+    private static final long serialVersionUID = 3L;
+
     /**
      * We will keep a reference to the Object (usually TreeMapper)
      * that can construct instances of nodes to add to this container
@@ -25,6 +27,8 @@ public abstract class ContainerNode<T extends ContainerNode<T>>
     protected ContainerNode(JsonNodeFactory nc) {
         _nodeFactory = nc;
     }
+
+    protected ContainerNode() { _nodeFactory = null; } // only for JDK ser
 
     // all containers are mutable: can't define:
 //    @Override public abstract <T extends JsonNode> T deepCopy();
@@ -52,11 +56,27 @@ public abstract class ContainerNode<T extends ContainerNode<T>>
 
     /*
     /**********************************************************
-    /* JsonNodeCreator implementation, just dispatch to
-    /* the real creator
+    /* JsonNodeCreator implementation, Enumerated/singleton types
     /**********************************************************
      */
 
+    @Override
+    public final BooleanNode booleanNode(boolean v) { return _nodeFactory.booleanNode(v); }
+
+    @Override
+    public JsonNode missingNode() {
+        return _nodeFactory.missingNode();
+    }
+
+    @Override
+    public final NullNode nullNode() { return _nodeFactory.nullNode(); }
+
+    /*
+    /**********************************************************
+    /* JsonNodeCreator implementation, just dispatch to real creator
+    /**********************************************************
+     */
+    
     /**
      * Factory method that constructs and returns an empty {@link ArrayNode}
      * Construction is done using registered {@link JsonNodeFactory}.
@@ -80,12 +100,6 @@ public abstract class ContainerNode<T extends ContainerNode<T>>
     public final ObjectNode objectNode() { return _nodeFactory.objectNode(); }
 
     @Override
-    public final NullNode nullNode() { return _nodeFactory.nullNode(); }
-
-    @Override
-    public final BooleanNode booleanNode(boolean v) { return _nodeFactory.booleanNode(v); }
-
-    @Override
     public final NumericNode numberNode(byte v) { return _nodeFactory.numberNode(v); }
     @Override
     public final NumericNode numberNode(short v) { return _nodeFactory.numberNode(v); }
@@ -96,18 +110,16 @@ public abstract class ContainerNode<T extends ContainerNode<T>>
         return _nodeFactory.numberNode(v);
     }
 
-    // was missing from 2.2 and before
-    @Override
-    public final NumericNode numberNode(BigInteger v) { return _nodeFactory.numberNode(v); }
-
     @Override
     public final NumericNode numberNode(float v) { return _nodeFactory.numberNode(v); }
     @Override
     public final NumericNode numberNode(double v) { return _nodeFactory.numberNode(v); }
-    @Override
-    public final NumericNode numberNode(BigDecimal v) { return (_nodeFactory.numberNode(v)); }
 
-    // // Wrapper types, missing from 2.2 and before
+    @Override
+    public final ValueNode numberNode(BigInteger v) { return _nodeFactory.numberNode(v); }
+    @Override
+    public final ValueNode numberNode(BigDecimal v) { return (_nodeFactory.numberNode(v)); }
+
     @Override
     public final ValueNode numberNode(Byte v) { return _nodeFactory.numberNode(v); }
     @Override

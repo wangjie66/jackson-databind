@@ -5,9 +5,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 
 import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.core.io.NumberOutput;
 import com.fasterxml.jackson.databind.SerializerProvider;
-
 
 /**
  * Numeric node that contains simple 32-bit integer values.
@@ -15,6 +13,8 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 public class IntNode
     extends NumericNode
 {
+    private static final long serialVersionUID = 3L;
+
     // // // Let's cache small set of common value
 
     final static int MIN_CANONICAL = -1;
@@ -102,7 +102,7 @@ public class IntNode
 
     @Override
     public String asText() {
-        return NumberOutput.toString(_value);
+        return String.valueOf(_value);
     }
 
     @Override

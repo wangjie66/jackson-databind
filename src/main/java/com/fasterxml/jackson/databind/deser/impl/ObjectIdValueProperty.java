@@ -29,9 +29,10 @@ public final class ObjectIdValueProperty
         _objectIdReader = objectIdReader;
     }
 
-    protected ObjectIdValueProperty(ObjectIdValueProperty src, JsonDeserializer<?> deser)
+    protected ObjectIdValueProperty(ObjectIdValueProperty src, JsonDeserializer<?> deser,
+            NullValueProvider nva)
     {
-        super(src, deser);
+        super(src, deser, nva);
         _objectIdReader = src._objectIdReader;
     }
 
@@ -41,18 +42,25 @@ public final class ObjectIdValueProperty
     }
 
     @Override
-    public ObjectIdValueProperty withName(PropertyName newName) {
+    public SettableBeanProperty withName(PropertyName newName) {
         return new ObjectIdValueProperty(this, newName);
     }
 
     @Override
-    public ObjectIdValueProperty withValueDeserializer(JsonDeserializer<?> deser) {
+    public SettableBeanProperty withValueDeserializer(JsonDeserializer<?> deser) {
         if (_valueDeserializer == deser) {
             return this;
         }
-        return new ObjectIdValueProperty(this, deser);
+        // 07-May-2019, tatu: As per [databind#2303], must keep VD/NVP in-sync if they were
+        NullValueProvider nvp = (_valueDeserializer == _nullProvider) ? deser : _nullProvider;
+        return new ObjectIdValueProperty(this, deser, nvp);
     }
-    
+
+    @Override
+    public SettableBeanProperty withNullProvider(NullValueProvider nva) {
+        return new ObjectIdValueProperty(this, _valueDeserializer, nva);
+    }
+
     // // // BeanProperty impl
     
     @Override

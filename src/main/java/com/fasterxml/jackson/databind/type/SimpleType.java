@@ -1,7 +1,5 @@
 package com.fasterxml.jackson.databind.type;
 
-import java.util.*;
-
 import com.fasterxml.jackson.databind.JavaType;
 
 /**
@@ -41,8 +39,6 @@ public class SimpleType // note: until 2.6 was final
     /**
      * Simple copy-constructor, usually used when upgrading/refining a simple type
      * into more specialized type.
-     *
-     * @since 2.7
      */
     protected SimpleType(TypeBase base) {
         super(base);
@@ -84,7 +80,7 @@ public class SimpleType // note: until 2.6 was final
                 null, null, null, null, false);
     }
 
-    /**
+    /*
      * Method that should NOT to be used by application code:
      * it does NOT properly handle inspection of super-types, so neither parent
      * Classes nor implemented Interfaces are accessible with resulting type
@@ -95,80 +91,30 @@ public class SimpleType // note: until 2.6 was final
      * have worked acceptably: the problem comes from inability to resolve super-type
      * information, for which {@link TypeFactory} is needed.
      * 
-     * @deprecated Since 2.7
-     */
     @Deprecated
     public static SimpleType construct(Class<?> cls)
     {
-        /* Let's add sanity checks, just to ensure no
-         * Map/Collection entries are constructed
-         */
+        // Let's add sanity checks, just to ensure no
+        // Map/Collection entries are constructed
         if (Map.class.isAssignableFrom(cls)) {
-            throw new IllegalArgumentException("Can not construct SimpleType for a Map (class: "+cls.getName()+")");
+            throw new IllegalArgumentException("Cannot construct SimpleType for a Map (class: "+cls.getName()+")");
         }
         if (Collection.class.isAssignableFrom(cls)) {
-            throw new IllegalArgumentException("Can not construct SimpleType for a Collection (class: "+cls.getName()+")");
+            throw new IllegalArgumentException("Cannot construct SimpleType for a Collection (class: "+cls.getName()+")");
         }
         // ... and while we are at it, not array types either
         if (cls.isArray()) {
-            throw new IllegalArgumentException("Can not construct SimpleType for an array (class: "+cls.getName()+")");
+            throw new IllegalArgumentException("Cannot construct SimpleType for an array (class: "+cls.getName()+")");
         }
         TypeBindings b = TypeBindings.emptyBindings();
         return new SimpleType(cls, b,
                 _buildSuperClass(cls.getSuperclass(), b), null, null, null, false);
     }
+    */
 
     @Override
-    @Deprecated
-    protected JavaType _narrow(Class<?> subclass)
-    {
-        if (_class == subclass) {
-            return this;
-        }
-        // Should we check that there is a sub-class relationship?
-        // 15-Jan-2016, tatu: Almost yes, but there are some complications with
-        //    placeholder values (`Void`, `NoClass`), so can not quite do yet.
-        // TODO: fix in 2.9
-        if (!_class.isAssignableFrom(subclass)) {
-            /*
-            throw new IllegalArgumentException("Class "+subclass.getName()+" not sub-type of "
-                    +_class.getName());
-                    */
-            return new SimpleType(subclass, _bindings, this, _superInterfaces,
-                    _valueHandler, _typeHandler, _asStatic);
-        }
-        // Otherwise, stitch together the hierarchy. First, super-class
-        Class<?> next = subclass.getSuperclass();
-        if (next == _class) { // straight up parent class? Great.
-            return new SimpleType(subclass, _bindings, this,
-                    _superInterfaces, _valueHandler, _typeHandler, _asStatic);
-        }
-        if ((next != null) && _class.isAssignableFrom(next)) {
-            JavaType superb = _narrow(next);
-            return new SimpleType(subclass, _bindings, superb,
-                    null, _valueHandler, _typeHandler, _asStatic);
-        }
-        // if not found, try a super-interface
-        Class<?>[] nextI = subclass.getInterfaces();
-        for (Class<?> iface : nextI) {
-            if (iface == _class) { // directly implemented
-                return new SimpleType(subclass, _bindings, null,
-                        new JavaType[] { this }, _valueHandler, _typeHandler, _asStatic);
-            }
-            if (_class.isAssignableFrom(iface)) { // indirect, so recurse
-                JavaType superb = _narrow(iface);
-                return new SimpleType(subclass, _bindings, null,
-                        new JavaType[] { superb }, _valueHandler, _typeHandler, _asStatic);
-            }
-        }
-        // should not get here but...
-        throw new IllegalArgumentException("Internal error: Can not resolve sub-type for Class "+subclass.getName()+" to "
-                +_class.getName());
-    }
-    
-    @Override
     public JavaType withContentType(JavaType contentType) {
-        throw new IllegalArgumentException("Simple types have no content types; can not call withContentType()");
+        throw new IllegalArgumentException("Simple types have no content types; cannot call withContentType()");
     }
     
     @Override
@@ -182,7 +128,7 @@ public class SimpleType // note: until 2.6 was final
     @Override
     public JavaType withContentTypeHandler(Object h) {
         // no content type, so:
-        throw new IllegalArgumentException("Simple types have no content types; can not call withContenTypeHandler()");
+        throw new IllegalArgumentException("Simple types have no content types; cannot call withContenTypeHandler()");
     }
 
     @Override
@@ -196,7 +142,7 @@ public class SimpleType // note: until 2.6 was final
     @Override
     public  SimpleType withContentValueHandler(Object h) {
         // no content type, so:
-        throw new IllegalArgumentException("Simple types have no content types; can not call withContenValueHandler()");
+        throw new IllegalArgumentException("Simple types have no content types; cannot call withContenValueHandler()");
     }
 
     @Override
@@ -265,31 +211,6 @@ public class SimpleType // note: until 2.6 was final
         }
         sb.append(';');
         return sb;
-    }
-
-    /*
-    /**********************************************************
-    /* Internal methods
-    /**********************************************************
-     */
-
-    /**
-     * Helper method we need to recursively build skeletal representations
-     * of superclasses.
-     * 
-     * @since 2.7 -- remove when not needed (2.8?)
-     */
-    private static JavaType _buildSuperClass(Class<?> superClass, TypeBindings b)
-    {
-        if (superClass == null) {
-            return null;
-        }
-        if (superClass == Object.class) {
-            return TypeFactory.unknownType();
-        }
-        JavaType superSuper = _buildSuperClass(superClass.getSuperclass(), b);
-        return new SimpleType(superClass, b,
-                superSuper, null, null, null, false);
     }
 
     /*

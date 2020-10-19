@@ -4,11 +4,8 @@ import java.io.IOException;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.databind.DeserializationConfig;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.JsonDeserializer;
-import com.fasterxml.jackson.databind.ObjectMapper;
+
+import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
 
 /**
@@ -35,8 +32,6 @@ public abstract class DeserializationProblemHandler
     /**
      * Marker value returned by some handler methods to indicate that
      * they could not handle problem and produce replacement value.
-     *
-     * @since 2.7
      */
     public final static Object NOT_HANDLED = new Object();
     
@@ -75,7 +70,7 @@ public abstract class DeserializationProblemHandler
     }
 
     /**
-     * Method called when a property name from input can not be converted to a
+     * Method called when a property name from input cannot be converted to a
      * non-Java-String key type (passed as <code>rawKeyType</code>) due to format problem.
      * Handler may choose to do one of 3 things:
      *<ul>
@@ -95,8 +90,6 @@ public abstract class DeserializationProblemHandler
      * @return Either {@link #NOT_HANDLED} to indicate that handler does not know
      *    what to do (and exception may be thrown), or value to use as key (possibly
      *    <code>null</code>
-     *
-     * @since 2.8
      */
     public Object handleWeirdKey(DeserializationContext ctxt,
             Class<?> rawKeyType, String keyValue,
@@ -108,7 +101,7 @@ public abstract class DeserializationProblemHandler
 
     /**
      * Method called when a String value
-     * can not be converted to a non-String value type due to specific problem
+     * cannot be converted to a non-String value type due to specific problem
      * (as opposed to String values never being usable).
      * Handler may choose to do one of 3 things:
      *<ul>
@@ -127,10 +120,8 @@ public abstract class DeserializationProblemHandler
      *    to indicate type of failure unless handler produces key to use
      *
      * @return Either {@link #NOT_HANDLED} to indicate that handler does not know
-     *    what to do (and exception may be thrown), or value to use as key (possibly
-     *    <code>null</code>
-     *
-     * @since 2.8
+     *    what to do (and exception may be thrown), or value to use as (possibly
+     *    <code>null</code>)
      */
     public Object handleWeirdStringValue(DeserializationContext ctxt,
             Class<?> targetType, String valueToConvert,
@@ -142,7 +133,7 @@ public abstract class DeserializationProblemHandler
 
     /**
      * Method called when a numeric value (integral or floating-point from input
-     * can not be converted to a non-numeric value type due to specific problem
+     * cannot be converted to a non-numeric value type due to specific problem
      * (as opposed to numeric values never being usable).
      * Handler may choose to do one of 3 things:
      *<ul>
@@ -161,14 +152,37 @@ public abstract class DeserializationProblemHandler
      *    to indicate type of failure unless handler produces key to use
      *
      * @return Either {@link #NOT_HANDLED} to indicate that handler does not know
-     *    what to do (and exception may be thrown), or value to use as key (possibly
-     *    <code>null</code>
-     *
-     * @since 2.8
+     *    what to do (and exception may be thrown), or value to use as (possibly
+     *    <code>null</code>)
      */
     public Object handleWeirdNumberValue(DeserializationContext ctxt,
-            Class<?> targetType, Number valueToConvert,
-            String failureMsg)
+            Class<?> targetType, Number valueToConvert, String failureMsg)
+        throws IOException
+    {
+        return NOT_HANDLED;
+    }
+
+    /**
+     * Method called when an embedded (native) value ({@link JsonToken#VALUE_EMBEDDED_OBJECT})
+     * cannot be converted directly into expected value type (usually POJO).
+     * Handler may choose to do one of 3 things:
+     *<ul>
+     * <li>Indicate it does not know what to do by returning {@link #NOT_HANDLED}
+     *  </li>
+     * <li>Throw a {@link IOException} to indicate specific fail message (instead of
+     *    standard exception caller would throw
+     *  </li>
+     * <li>Return actual converted value (of type <code>targetType</code>) to use as
+     *    replacement, and continue processing.
+     *  </li>
+     * </ul>
+     *
+     * @return Either {@link #NOT_HANDLED} to indicate that handler does not know
+     *    what to do (and exception may be thrown), or value to use (possibly
+     *    <code>null</code>)
+     */
+    public Object handleWeirdNativeValue(DeserializationContext ctxt,
+            JavaType targetType, Object valueToConvert, JsonParser p)
         throws IOException
     {
         return NOT_HANDLED;
@@ -177,7 +191,7 @@ public abstract class DeserializationProblemHandler
     /**
      * Method that deserializers should call if the first token of the value to
      * deserialize is of unexpected type (that is, type of token that deserializer
-     * can not handle). This could occur, for example, if a Number deserializer
+     * cannot handle). This could occur, for example, if a Number deserializer
      * encounter {@link JsonToken#START_ARRAY} instead of
      * {@link JsonToken#VALUE_NUMBER_INT} or {@link JsonToken#VALUE_NUMBER_FLOAT}.
      *<ul>
@@ -198,17 +212,15 @@ public abstract class DeserializationProblemHandler
      * @return Either {@link #NOT_HANDLED} to indicate that handler does not know
      *    what to do (and exception may be thrown), or value to use (possibly
      *    <code>null</code>
-     *
-     * @since 2.8
      */
     public Object handleUnexpectedToken(DeserializationContext ctxt,
-            Class<?> targetType, JsonToken t, JsonParser p,
+            JavaType targetType, JsonToken t, JsonParser p,
             String failureMsg)
         throws IOException
     {
         return NOT_HANDLED;
     }
-    
+
     /**
      * Method called when instance creation for a type fails due to an exception.
      * Handler may choose to do one of following things:
@@ -233,8 +245,6 @@ public abstract class DeserializationProblemHandler
      * @return Either {@link #NOT_HANDLED} to indicate that handler does not know
      *    what to do (and exception may be thrown), or value to use (possibly
      *    <code>null</code>
-     *
-     * @since 2.8
      */
     public Object handleInstantiationProblem(DeserializationContext ctxt,
             Class<?> instClass, Object argument, Throwable t)
@@ -266,16 +276,15 @@ public abstract class DeserializationProblemHandler
      * @return Either {@link #NOT_HANDLED} to indicate that handler does not know
      *    what to do (and exception may be thrown), or value to use (possibly
      *    <code>null</code>
-     *
-     * @since 2.8
      */
     public Object handleMissingInstantiator(DeserializationContext ctxt,
-            Class<?> instClass, JsonParser p, String msg)
+            Class<?> instClass, ValueInstantiator valueInsta, JsonParser p,
+            String msg)
         throws IOException
     {
         return NOT_HANDLED;
     }
-    
+
     /**
      * Handler method called if resolution of type id from given String failed
      * to produce a subtype; usually because logical id is not mapped to actual
@@ -303,11 +312,43 @@ public abstract class DeserializationProblemHandler
      * @return Actual type to use, if resolved; `null` if handler does not know what
      *     to do; or `Void.class` to indicate that nothing should be deserialized for
      *     type with the id (which caller may choose to do... or not)
-     *
-     * @since 2.8
      */
     public JavaType handleUnknownTypeId(DeserializationContext ctxt,
             JavaType baseType, String subTypeId, TypeIdResolver idResolver,
+            String failureMsg)
+        throws IOException
+    {
+        return null;
+    }
+
+    /**
+     * Handler method called if an expected type id for a polymorphic value is
+     * not found and no "default type" is specified or allowed.
+     * Handler may choose to do one of following things:
+     *<ul>
+     * <li>Indicate it does not know what to do by returning `null`
+     *  </li>
+     * <li>Indicate that nothing should be deserialized, by return `Void.class`
+     *  </li>
+     * <li>Throw a {@link IOException} to indicate specific fail message (instead of
+     *    standard exception caller would throw
+     *  </li>
+     * <li>Return actual resolved type to use for this particular case.
+     *  </li>
+     * </ul>
+     *
+     * @param ctxt Deserialization context to use for accessing information or
+     *    constructing exception to throw
+     * @param baseType Base type to use for resolving subtype id
+     * @param failureMsg Informational message that would be thrown as part of
+     *    exception, if resolution still fails
+     *
+     * @return Actual type to use, if resolved; `null` if handler does not know what
+     *     to do; or `Void.class` to indicate that nothing should be deserialized for
+     *     type with the id (which caller may choose to do... or not)
+     */
+    public JavaType handleMissingTypeId(DeserializationContext ctxt,
+            JavaType baseType, TypeIdResolver idResolver,
             String failureMsg)
         throws IOException
     {

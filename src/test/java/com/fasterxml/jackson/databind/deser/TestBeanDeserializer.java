@@ -3,11 +3,10 @@ package com.fasterxml.jackson.databind.deser;
 import java.io.IOException;
 import java.util.*;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.deser.BeanDeserializer;
-import com.fasterxml.jackson.databind.deser.BeanDeserializerBuilder;
-import com.fasterxml.jackson.databind.deser.BeanDeserializerModifier;
 import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import com.fasterxml.jackson.databind.deser.std.StdScalarDeserializer;
 import com.fasterxml.jackson.databind.module.SimpleModule;
@@ -18,11 +17,9 @@ import com.fasterxml.jackson.databind.type.MapType;
 @SuppressWarnings("serial")
 public class TestBeanDeserializer extends BaseMapTest
 {
-    /*
-    /**********************************************************
-    /* Helper types
-    /**********************************************************
-     */
+    static abstract class Abstract {
+        public int x;
+    }
 
     static class Bean {
         public String b = "b";
@@ -50,7 +47,7 @@ public class TestBeanDeserializer extends BaseMapTest
         {
             super.setupModule(context);
             if (modifier != null) {
-                context.addBeanDeserializerModifier(modifier);
+                context.addDeserializerModifier(modifier);
             }
         }
     }
@@ -105,7 +102,6 @@ public class TestBeanDeserializer extends BaseMapTest
         public String name, value;
     }
     static class Issue476Deserializer extends BeanDeserializer
-        implements ContextualDeserializer
     {
         protected static int propCount;
 
@@ -116,6 +112,7 @@ public class TestBeanDeserializer extends BaseMapTest
         @Override
         public JsonDeserializer<?> createContextual(DeserializationContext ctxt,
                 BeanProperty property) throws JsonMappingException {
+            super.createContextual(ctxt, property);
             propCount++;
             return this;
         }        
@@ -138,10 +135,95 @@ public class TestBeanDeserializer extends BaseMapTest
         
         @Override
         public void setupModule(SetupContext context) {
-            context.addBeanDeserializerModifier(new Issue476DeserializerModifier());
+            context.addDeserializerModifier(new Issue476DeserializerModifier());
         }        
     }
-    
+
+    public static class Issue1912Bean {
+        public Issue1912SubBean subBean;
+
+        @JsonCreator(mode = JsonCreator.Mode.PROPERTIES) // This is need to populate _propertyBasedCreator on BeanDeserializerBase
+        public Issue1912Bean(@JsonProperty("subBean") Issue1912SubBean subBean) {
+            this.subBean = subBean;
+        }
+    }
+    public static class Issue1912SubBean {
+        public String a;
+
+        public Issue1912SubBean() { }
+
+        public Issue1912SubBean(String a) {
+            this.a = a;
+        }
+    }
+
+    public static class Issue1912CustomBeanDeserializer extends JsonDeserializer<Issue1912Bean> {
+        private BeanDeserializer defaultDeserializer;
+
+        public Issue1912CustomBeanDeserializer(BeanDeserializer defaultDeserializer) {
+            this.defaultDeserializer = defaultDeserializer;
+        }
+
+        @Override
+        public Issue1912Bean deserialize(JsonParser p, DeserializationContext ctxt) throws IOException, JsonProcessingException {
+            // this is need on some cases, this populate _propertyBasedCreator
+            defaultDeserializer.resolve(ctxt);
+
+            p.nextFieldName(); // read subBean
+            p.nextToken(); // read start object
+
+            Issue1912SubBean subBean = (Issue1912SubBean) defaultDeserializer.findProperty("subBean").deserialize(p, ctxt);
+
+            return new Issue1912Bean(subBean);
+        }
+    }
+
+    public static class Issue1912CustomPropertyDeserializer extends JsonDeserializer<Issue1912SubBean> {
+
+        @Override
+        public Issue1912SubBean deserialize(JsonParser p, DeserializationContext ctxt) throws IOException, JsonProcessingException {
+            p.nextFieldName(); // read "a"
+            Issue1912SubBean object = new Issue1912SubBean(p.nextTextValue() + "_custom");
+            p.nextToken();
+            return object;
+        }
+    }
+    public static class Issue1912UseAddOrReplacePropertyDeserializerModifier extends BeanDeserializerModifier {
+
+        @Override
+        public JsonDeserializer<?> modifyDeserializer(DeserializationConfig config, BeanDescription beanDesc, JsonDeserializer<?> deserializer) {
+            if (beanDesc.getBeanClass() == Issue1912Bean.class) {
+                return new Issue1912CustomBeanDeserializer((BeanDeserializer) deserializer);
+            }
+            return super.modifyDeserializer(config, beanDesc, deserializer);
+        }
+
+        @Override
+        public BeanDeserializerBuilder updateBuilder(DeserializationConfig config, BeanDescription beanDesc, BeanDeserializerBuilder builder) {
+            if (beanDesc.getBeanClass() == Issue1912Bean.class) {
+                Iterator<SettableBeanProperty> props = builder.getProperties();
+                while (props.hasNext()) {
+                    SettableBeanProperty prop = props.next();
+                    SettableBeanProperty propWithCustomDeserializer = prop.withValueDeserializer(new Issue1912CustomPropertyDeserializer());
+                    builder.addOrReplaceProperty(propWithCustomDeserializer, true);
+                }
+            }
+
+            return builder;
+        }
+    }
+    public class Issue1912Module extends SimpleModule {
+
+        public Issue1912Module() {
+            super("Issue1912Module", Version.unknownVersion());
+        }
+
+        @Override
+        public void setupModule(SetupContext context) {
+            context.addDeserializerModifier(new Issue1912UseAddOrReplacePropertyDeserializerModifier());
+        }
+    }
+
     // [Issue#121], arrays, collections, maps
 
     enum EnumABC { A, B, C; }
@@ -240,12 +322,27 @@ public class TestBeanDeserializer extends BaseMapTest
     /********************************************************
      */
 
-    private final ObjectMapper MAPPER = new ObjectMapper();
+    private final ObjectMapper MAPPER = newJsonMapper();
 
+    /**
+     * Test to verify details of how trying to deserialize into
+     * abstract type should fail (if there is no way to determine
+     * actual type information for the concrete type to use)
+     */
+    public void testAbstractFailure() throws Exception
+    {
+        try {
+            MAPPER.readValue("{ \"x\" : 3 }", Abstract.class);
+            fail("Should fail on trying to deserialize abstract type");
+        } catch (JsonProcessingException e) {
+            verifyException(e, "cannot construct");
+        }
+    }    
     public void testPropertyRemoval() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new ModuleImpl(new RemovingModifier("a")));
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new ModuleImpl(new RemovingModifier("a")))
+                .build();
         Bean bean = mapper.readValue("{\"b\":\"2\"}", Bean.class);
         assertEquals("2", bean.b);
         // and 'a' has its default value:
@@ -254,8 +351,9 @@ public class TestBeanDeserializer extends BaseMapTest
 
     public void testDeserializerReplacement() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new ModuleImpl(new ReplacingModifier(new BogusBeanDeserializer("foo", "bar"))));
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new ModuleImpl(new ReplacingModifier(new BogusBeanDeserializer("foo", "bar"))))
+                .build();
         Bean bean = mapper.readValue("{\"a\":\"xyz\"}", Bean.class);
         // custom deserializer always produces instance like this:
         assertEquals("foo", bean.a);
@@ -266,38 +364,22 @@ public class TestBeanDeserializer extends BaseMapTest
     {
         final String JSON = "{\"value1\" : {\"name\" : \"fruit\", \"value\" : \"apple\"}, \"value2\" : {\"name\" : \"color\", \"value\" : \"red\"}}";
         
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new Issue476Module());
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new Issue476Module())
+                .build();
         mapper.readValue(JSON, Issue476Bean.class);
 
         // there are 2 properties
         assertEquals(2, Issue476Deserializer.propCount);
     }
 
-    public void testPOJOFromEmptyString() throws Exception
-    {
-        // first, verify default settings which do not accept empty String:
-        assertFalse(MAPPER.isEnabled(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT));
-        try {
-            MAPPER.readValue(quote(""), Bean.class);
-            fail("Should not accept Empty String for POJO");
-        } catch (JsonProcessingException e) {
-            verifyException(e, "from String value");
-            assertValidLocation(e.getLocation());
-        }
-        // should be ok to enable dynamically
-        ObjectReader r = MAPPER.readerFor(Bean.class)
-                .with(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT);
-        Bean result = r.readValue(quote(""));
-        assertNull(result);
-    }
-
     // [databind#120]
     public void testModifyArrayDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new SimpleModule("test")
-            .setDeserializerModifier(new ArrayDeserializerModifier()));
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new SimpleModule("test")
+                        .setDeserializerModifier(new ArrayDeserializerModifier()))
+                .build();
         Object[] result = mapper.readValue("[1,2]", Object[].class);
         assertEquals(1, result.length);
         assertEquals("foo", result[0]);
@@ -305,10 +387,10 @@ public class TestBeanDeserializer extends BaseMapTest
 
     public void testModifyCollectionDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new SimpleModule("test")
-            .setDeserializerModifier(new CollectionDeserializerModifier())
-        );
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new SimpleModule("test")
+                        .setDeserializerModifier(new CollectionDeserializerModifier()))
+            .build();
         List<?> result = mapper.readValue("[1,2]", List.class);
         assertEquals(1, result.size());
         assertEquals("foo", result.get(0));
@@ -316,10 +398,10 @@ public class TestBeanDeserializer extends BaseMapTest
 
     public void testModifyMapDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new SimpleModule("test")
-            .setDeserializerModifier(new MapDeserializerModifier())
-        );
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new SimpleModule("test")
+                        .setDeserializerModifier(new MapDeserializerModifier()))
+                .build();
         Map<?,?> result = mapper.readValue("{\"a\":1,\"b\":2}", Map.class);
         assertEquals(1, result.size());
         assertEquals("foo", result.get("a"));
@@ -327,20 +409,20 @@ public class TestBeanDeserializer extends BaseMapTest
 
     public void testModifyEnumDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new SimpleModule("test")
-            .setDeserializerModifier(new EnumDeserializerModifier())
-        );
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new SimpleModule("test")
+                        .setDeserializerModifier(new EnumDeserializerModifier()))
+                .build();
         Object result = mapper.readValue(quote("B"), EnumABC.class);
         assertEquals("foo", result);
     }
 
     public void testModifyKeyDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new SimpleModule("test")
-            .setDeserializerModifier(new KeyDeserializerModifier())
-        );
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new SimpleModule("test")
+                        .setDeserializerModifier(new KeyDeserializerModifier()))
+                .build();
         Map<?,?> result = mapper.readValue("{\"a\":1}", Map.class);
         assertEquals(1, result.size());
         assertEquals("foo", result.entrySet().iterator().next().getKey());
@@ -352,9 +434,9 @@ public class TestBeanDeserializer extends BaseMapTest
      */
     public void testModifyStdScalarDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new SimpleModule("test")
-            .setDeserializerModifier(new BeanDeserializerModifier() {
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new SimpleModule("test")
+                        .setDeserializerModifier(new BeanDeserializerModifier() {
                         @Override
                         public JsonDeserializer<?> modifyDeserializer(DeserializationConfig config,
                                 BeanDescription beanDesc, JsonDeserializer<?> deser) {
@@ -363,9 +445,18 @@ public class TestBeanDeserializer extends BaseMapTest
                             }
                             return deser;
                         }
-            }));
+                        }))
+                .build();
         Object result = mapper.readValue(quote("abcDEF"), String.class);
         assertEquals("ABCDEF", result);
     }
 
+    public void testAddOrReplacePropertyIsUsedOnDeserialization() throws Exception {
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(new Issue1912Module())
+                .build();
+
+        Issue1912Bean result = mapper.readValue("{\"subBean\": {\"a\":\"foo\"}}", Issue1912Bean.class);
+        assertEquals("foo_custom", result.subBean.a);
+    }
 }

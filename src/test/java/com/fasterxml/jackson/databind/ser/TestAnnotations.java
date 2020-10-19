@@ -9,6 +9,7 @@ import com.fasterxml.jackson.core.*;
 
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 
 /**
  * This unit test suite tests use of Annotations for
@@ -17,12 +18,6 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 public class TestAnnotations
     extends BaseMapTest
 {
-    /*
-    /**********************************************************
-    /* Helper classes
-    /**********************************************************
-     */
-
     /// Class for testing {@link JsonProperty} annotations with getters
     final static class SizeClassGetter
     {
@@ -135,8 +130,9 @@ public class TestAnnotations
     /**********************************************************
      */
 
-    public final static class BogusSerializer extends JsonSerializer<Object>
+    public final static class BogusSerializer extends StdSerializer<Object>
     {
+        public BogusSerializer() { super(Object.class); }
         @Override
         public void serialize(Object value, JsonGenerator jgen, SerializerProvider provider)
             throws IOException, JsonGenerationException
@@ -145,8 +141,9 @@ public class TestAnnotations
         }
     }
 
-    private final static class StringSerializer extends JsonSerializer<Object>
+    private final static class StringSerializer extends StdSerializer<Object>
     {
+        public StringSerializer() { super(Object.class); }
         @Override
         public void serialize(Object value, JsonGenerator jgen, SerializerProvider provider)
             throws IOException, JsonGenerationException
@@ -245,16 +242,18 @@ public class TestAnnotations
         assertEquals("{\"a\":3,\"b\":4,\"c\":5,\"d\":6}", m.writeValueAsString(bean));
 
         // but 3 if we require mutator:
-        m = new ObjectMapper();
-        m.enable(MapperFeature.REQUIRE_SETTERS_FOR_GETTERS);
+        m = jsonMapperBuilder()
+                .enable(MapperFeature.REQUIRE_SETTERS_FOR_GETTERS)
+                .build();
         assertEquals("{\"a\":3,\"c\":5,\"d\":6}", m.writeValueAsString(bean));
     }
 
     public void testGettersWithoutSettersOverride() throws Exception
     {
         GettersWithoutSetters2 bean = new GettersWithoutSetters2();
-        ObjectMapper m = new ObjectMapper();
-        m.enable(MapperFeature.REQUIRE_SETTERS_FOR_GETTERS);
+        ObjectMapper m = jsonMapperBuilder()
+                .enable(MapperFeature.REQUIRE_SETTERS_FOR_GETTERS)
+                .build();
         assertEquals("{\"a\":123}", m.writeValueAsString(bean));
     }
 }

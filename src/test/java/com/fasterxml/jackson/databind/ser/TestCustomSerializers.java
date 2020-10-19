@@ -8,33 +8,34 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.w3c.dom.Element;
 
+import com.fasterxml.jackson.annotation.JsonFilter;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.core.io.CharacterEscapes;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.databind.ser.impl.SimpleBeanPropertyFilter;
+import com.fasterxml.jackson.databind.ser.impl.SimpleFilterProvider;
 import com.fasterxml.jackson.databind.ser.std.CollectionSerializer;
 import com.fasterxml.jackson.databind.ser.std.StdDelegatingSerializer;
 import com.fasterxml.jackson.databind.ser.std.StdScalarSerializer;
+import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 import com.fasterxml.jackson.databind.util.StdConverter;
 
 /**
  * Tests for verifying various issues with custom serializers.
  */
+@SuppressWarnings("serial")
 public class TestCustomSerializers extends BaseMapTest
 {
-    /*
-    /**********************************************************
-    /* Helper beans
-    /**********************************************************
-     */
-
-    static class ElementSerializer extends JsonSerializer<Element>
+    static class ElementSerializer extends StdSerializer<Element>
     {
+        public ElementSerializer() { super(Element.class); }
         @Override
-        public void serialize(Element value, JsonGenerator jgen, SerializerProvider provider) throws IOException, JsonProcessingException {
-            jgen.writeString("element");
+        public void serialize(Element value, JsonGenerator gen, SerializerProvider provider) throws IOException, JsonProcessingException {
+            gen.writeString("element");
         }
     }
     
@@ -49,7 +50,6 @@ public class TestCustomSerializers extends BaseMapTest
     /**
      * Trivial simple custom escape definition set.
      */
-    @SuppressWarnings("serial")
     static class CustomEscapes extends CharacterEscapes
     {
         private final int[] _asciiEscapes;
@@ -110,8 +110,7 @@ public class TestCustomSerializers extends BaseMapTest
             prop = o;
         }
     }
-    
-    @SuppressWarnings("serial")
+
     static class ParentClassSerializer
         extends StdScalarSerializer<Object>
     {
@@ -127,52 +126,117 @@ public class TestCustomSerializers extends BaseMapTest
             gen.writeString(desc+"/"+value);
         }
     }
-    
+
+    static class UCStringSerializer extends StdScalarSerializer<String>
+    {
+        public UCStringSerializer() { super(String.class); }
+
+        @Override
+        public void serialize(String value, JsonGenerator gen,
+                SerializerProvider provider) throws IOException {
+            gen.writeString(value.toUpperCase());
+        }
+    }
+
+    // IMPORTANT: must associate serializer via property annotations
+    protected static class StringListWrapper
+    {
+        @JsonSerialize(contentUsing=UCStringSerializer.class)
+        public List<String> list;
+
+        public StringListWrapper(String... values) {
+            list = new ArrayList<>();
+            for (String value : values) {
+                list.add(value);
+            }
+        }
+    }
+
+    // [databind#2475]
+    static class MyFilter2475 extends SimpleBeanPropertyFilter {
+        @Override
+        public void serializeAsField(Object pojo, JsonGenerator jgen, SerializerProvider provider, PropertyWriter writer) throws Exception {
+            // Ensure that "current value" remains pojo
+            final TokenStreamContext ctx = jgen.getOutputContext();
+            final Object curr = ctx.getCurrentValue();
+
+            if (!(curr instanceof Item2475)) {
+                throw new Error("Field '"+writer.getName()+"', context not that of `Item2475` instance");
+            }
+            super.serializeAsField(pojo, jgen, provider, writer);
+        }
+    }
+
+    @JsonFilter("myFilter")
+    @JsonPropertyOrder({ "id", "set" })
+    public static class Item2475 {
+        private Collection<String> set;
+        private String id;
+
+        public Item2475(Collection<String> set, String id) {
+            this.set = set;
+            this.id = id;
+        }
+
+        public Collection<String> getSet() {
+            return set;
+        }
+
+        public String getId() {
+            return id;
+        }
+    }
+
     /*
     /**********************************************************
     /* Unit tests
     /**********************************************************
-    */
+     */
 
     private final ObjectMapper MAPPER = new ObjectMapper();
 
     public void testCustomization() throws Exception
     {
-        ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.addMixIn(Element.class, ElementMixin.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addMixIn(Element.class, ElementMixin.class)
+                .build();
         Element element = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument().createElement("el");
         StringWriter sw = new StringWriter();
-        objectMapper.writeValue(sw, element);
+        mapper.writeValue(sw, element);
         assertEquals(sw.toString(), "\"element\"");
     }
 
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public void testCustomLists() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         SimpleModule module = new SimpleModule("test", Version.unknownVersion());
         JsonSerializer<?> ser = new CollectionSerializer(null, false, null, null);
         final JsonSerializer<Object> collectionSerializer = (JsonSerializer<Object>) ser;
 
         module.addSerializer(Collection.class, new JsonSerializer<Collection>() {
             @Override
-            public void serialize(Collection value, JsonGenerator jgen, SerializerProvider provider)
-                    throws IOException, JsonProcessingException {
+            public void serialize(Collection value, JsonGenerator gen, SerializerProvider provider)
+                    throws IOException
+            {
                 if (value.size() != 0) {
-                    collectionSerializer.serialize(value, jgen, provider);
+                    collectionSerializer.serialize(value, gen, provider);
                 } else {
-                    jgen.writeNull();
+                    gen.writeNull();
                 }
             }
+
+            @Override
+            public Class<?> handledType() { return Collection.class; }
         });
-        mapper.registerModule(module);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(module)
+                .build();
         assertEquals("null", mapper.writeValueAsString(new ArrayList<Object>()));
     }
 
-    // [Issue#87]: delegating serializer
+    // [databind#87]: delegating serializer
     public void testDelegating() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         SimpleModule module = new SimpleModule("test", Version.unknownVersion());
         module.addSerializer(new StdDelegatingSerializer(Immutable.class,
                 new StdConverter<Immutable, Map<String,Integer>>() {
@@ -185,11 +249,13 @@ public class TestCustomSerializers extends BaseMapTest
                         return map;
                     }
         }));
-        mapper.registerModule(module);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(module)
+                .build();
         assertEquals("{\"x\":3,\"y\":7}", mapper.writeValueAsString(new Immutable()));
     }
 
-    // [Issue#215]: Allow registering CharacterEscapes via ObjectWriter
+    // [databind#215]: Allow registering CharacterEscapes via ObjectWriter
     public void testCustomEscapes() throws Exception
     {
         assertEquals(quote("foo\\u0062\\Ar"),
@@ -207,4 +273,45 @@ public class TestCustomSerializers extends BaseMapTest
         assertEquals(aposToQuotes("{'prop':'Issue631Bean/42'}"),
                 MAPPER.writeValueAsString(new Issue631Bean(42)));
     }
+
+    public void testWithCustomElements() throws Exception
+    {
+        // First variant that uses per-property override
+        StringListWrapper wr = new StringListWrapper("a", null, "b");
+        assertEquals(aposToQuotes("{'list':['A',null,'B']}"),
+                MAPPER.writeValueAsString(wr));
+
+        // and then per-type registration
+        
+        SimpleModule module = new SimpleModule("test", Version.unknownVersion());
+        module.addSerializer(String.class, new UCStringSerializer());
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(module)
+                .build();
+
+        assertEquals(quote("FOOBAR"), mapper.writeValueAsString("foobar"));
+        assertEquals(aposToQuotes("['FOO',null]"),
+                mapper.writeValueAsString(new String[] { "foo", null }));
+
+        List<String> list = Arrays.asList("foo", null);
+        assertEquals(aposToQuotes("['FOO',null]"), mapper.writeValueAsString(list));
+
+        Set<String> set = new LinkedHashSet<String>(Arrays.asList("foo", null));
+        assertEquals(aposToQuotes("['FOO',null]"), mapper.writeValueAsString(set));
+    }
+
+    // [databind#2475]
+    public void testIssue2475() throws Exception {
+        SimpleFilterProvider provider = new SimpleFilterProvider().addFilter("myFilter", new MyFilter2475());
+        ObjectWriter writer = MAPPER.writer(provider);
+
+        // contents don't really matter that much as verification within filter but... let's
+        // check anyway
+        assertEquals(aposToQuotes("{'id':'ID-1','set':[]}"),
+                writer.writeValueAsString(new Item2475(new ArrayList<String>(), "ID-1")));
+
+        assertEquals(aposToQuotes("{'id':'ID-2','set':[]}"),
+                writer.writeValueAsString(new Item2475(new HashSet<String>(), "ID-2")));
+    }    
+
 }

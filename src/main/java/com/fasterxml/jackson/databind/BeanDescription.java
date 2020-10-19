@@ -8,7 +8,6 @@ import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder;
 import com.fasterxml.jackson.databind.introspect.*;
-import com.fasterxml.jackson.databind.type.TypeBindings;
 import com.fasterxml.jackson.databind.util.Annotations;
 import com.fasterxml.jackson.databind.util.Converter;
 
@@ -23,14 +22,14 @@ public abstract class BeanDescription
 {
     /**
      * Bean type information, including raw class and possible
-     * * generics information
+     * generics information
      */
     protected final JavaType _type;
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
      */
 
     protected BeanDescription(JavaType type) {
@@ -38,9 +37,9 @@ public abstract class BeanDescription
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Simple accesors
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -51,9 +50,6 @@ public abstract class BeanDescription
 
     public Class<?> getBeanClass() { return _type.getRawClass(); }
 
-    /**
-     * @since 2.9
-     */
     public boolean isNonStaticInnerClass() {
         return getClassInfo().isNonStaticInnerClass();
     }
@@ -77,35 +73,15 @@ public abstract class BeanDescription
     public abstract boolean hasKnownClassAnnotations();
 
     /**
-     * Accessor for type bindings that may be needed to fully resolve
-     * types of member object, such as return and argument types of
-     * methods and constructors, and types of fields.
-     *
-     * @deprecated Since 2.7, should not need to access bindings directly
-     */
-    @Deprecated
-    public abstract TypeBindings bindingsForBeanType();
-
-    /**
-     * Method for resolving given JDK type, using this bean as the
-     * generic type resolution context.
-     *
-     * @deprecated Since 2.8, should simply call <code>getType</code> of
-     *    property accessor directly.
-     */
-    @Deprecated
-    public abstract JavaType resolveType(java.lang.reflect.Type jdkType);
-
-    /**
      * Method for accessing collection of annotations the bean
      * class has.
      */
     public abstract Annotations getClassAnnotations();
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Basic API for finding properties
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -114,17 +90,17 @@ public abstract class BeanDescription
      */
     public abstract List<BeanPropertyDefinition> findProperties();
 
+    public abstract Set<String> getIgnoredPropertyNames();
+
     /**
      * Method for locating all back-reference properties (setters, fields) bean has
      */
-    public abstract Map<String,AnnotatedMember> findBackReferenceProperties();
-
-    public abstract Set<String> getIgnoredPropertyNames();
+    public abstract List<BeanPropertyDefinition> findBackReferences();
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Basic API for finding creator members
-    /**********************************************************
+    /**********************************************************************
      */
 
     public abstract List<AnnotatedConstructor> getConstructors();
@@ -158,47 +134,40 @@ public abstract class BeanDescription
     public abstract Method findFactoryMethod(Class<?>... expArgTypes);
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Basic API for finding property accessors
-    /**********************************************************
+    /**********************************************************************
      */
-    
-    public abstract AnnotatedMember findAnyGetter();
 
     /**
-     * Method used to locate the method of introspected class that
-     * implements {@link com.fasterxml.jackson.annotation.JsonAnySetter}. If no such method exists
-     * null is returned. If more than one are found, an exception
-     * is thrown.
-     * Additional checks are also made to see that method signature
-     * is acceptable: needs to take 2 arguments, first one String or
-     * Object; second any can be any type.
-     */
-    public abstract AnnotatedMethod findAnySetter();
-
-    /**
-     * Method used to locate the field of the class that implements
-     * {@link com.fasterxml.jackson.annotation.JsonAnySetter} If no such method
-     * exists null is returned. If more than one are found, an exception is thrown.
-     * 
-     * @since 2.8
-     */
-    public abstract AnnotatedMember findAnySetterField();
-
-    /**
-     * Method for locating the getter method that is annotated with
+     * Method for locating accessor (readable field, or "getter" method)
+     * that has
      * {@link com.fasterxml.jackson.annotation.JsonValue} annotation,
      * if any. If multiple ones are found,
      * an error is reported by throwing {@link IllegalArgumentException}
      */
-    public abstract AnnotatedMethod findJsonValueMethod();
+    public abstract AnnotatedMember findJsonValueAccessor();
+
+    public abstract AnnotatedMember findAnyGetter();
+
+    /**
+     * Method used to locate a mutator (settable field, or 2-argument set method)
+     * of introspected class that
+     * implements {@link com.fasterxml.jackson.annotation.JsonAnySetter}.
+     * If no such mutator exists null is returned. If more than one are found,
+     * an exception is thrown.
+     * Additional checks are also made to see that method signature
+     * is acceptable: needs to take 2 arguments, first one String or
+     * Object; second any can be any type.
+     */
+    public abstract AnnotatedMember findAnySetterAccessor();
 
     public abstract AnnotatedMethod findMethod(String name, Class<?>[] paramTypes);
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Basic API, class configuration
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -207,48 +176,46 @@ public abstract class BeanDescription
      *<p>
      * NOTE: does NOT use global inclusion default settings as the base, unless
      * passed as `defValue`.
-     *
-     * @since 2.7
      */
     public abstract JsonInclude.Value findPropertyInclusion(JsonInclude.Value defValue);
 
     /**
      * Method for checking what is the expected format for POJO, as
-     * defined by defaults and possible annotations.
-     * Note that this may be further refined by per-property annotations.
-     * 
-     * @since 2.1
+     * defined by possible annotations (but NOT config overrides)
+     *
+     * @deprecated Since 3.0
      */
-    public abstract JsonFormat.Value findExpectedFormat(JsonFormat.Value defValue);
+    @Deprecated // since 3.0
+    public abstract JsonFormat.Value findExpectedFormat();
+
+    /**
+     * Method for checking what is the expected format for POJO, as
+     * defined by possible annotations and possible per-type config overrides.
+     */
+    public abstract JsonFormat.Value findExpectedFormat(Class<?> baseType);
 
     /**
      * Method for finding {@link Converter} used for serializing instances
      * of this class.
-     * 
-     * @since 2.2
      */
     public abstract Converter<Object,Object> findSerializationConverter();
 
     /**
      * Method for finding {@link Converter} used for serializing instances
      * of this class.
-     * 
-     * @since 2.2
      */
     public abstract Converter<Object,Object> findDeserializationConverter();
 
     /**
      * Accessor for possible description for the bean type, used for constructing
      * documentation.
-     *
-     * @since 2.7
      */
     public String findClassDescription() { return null; }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Basic API, other
-    /**********************************************************
+    /**********************************************************************
      */
 
     public abstract Map<Object, AnnotatedMember> findInjectables();
@@ -279,4 +246,11 @@ public abstract class BeanDescription
      *   suitable default constructor was found; null otherwise.
      */
     public abstract Object instantiateBean(boolean fixAccess);
+
+    /**
+     * Method for finding out if the POJO specifies default view(s) to
+     * use for properties, considering both per-type annotations and
+     * global default settings.
+     */
+    public abstract Class<?>[] findDefaultViews();
 }

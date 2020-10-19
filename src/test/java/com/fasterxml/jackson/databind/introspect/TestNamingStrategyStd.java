@@ -168,18 +168,14 @@ public class TestNamingStrategyStd extends BaseMapTest
                 // [databind#1026]
                 {"usId", "us_id" },
                 {"uId", "u_id" },
+                // [databind#2267]
+                {"xCoordinate", "x_coordinate" },
     });
     
-    private ObjectMapper _lcWithUndescoreMapper;
-    
-    @Override
-    public void setUp() throws Exception
-    {
-        super.setUp();
-        _lcWithUndescoreMapper = new ObjectMapper();
-        _lcWithUndescoreMapper.setPropertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE);
-    }
-    
+    private static ObjectMapper _lcWithUndescoreMapper = jsonMapperBuilder()
+                .propertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE)
+                .build();
+
     /*
     /**********************************************************
     /* Test methods for SNAKE_CASE
@@ -280,8 +276,9 @@ public class TestNamingStrategyStd extends BaseMapTest
     // [databind#428]
     public void testIssue428PascalWithOverrides() throws Exception
     {
-        String json = new ObjectMapper()
-                .setPropertyNamingStrategy(PropertyNamingStrategy.UPPER_CAMEL_CASE)
+        String json = jsonMapperBuilder()
+                .propertyNamingStrategy(PropertyNamingStrategy.UPPER_CAMEL_CASE)
+                .build()
                 .writeValueAsString(new Bean428());
         if (!json.contains(quote("fooBar"))) {
             fail("Should use name 'fooBar', does not: "+json);
@@ -327,12 +324,46 @@ public class TestNamingStrategyStd extends BaseMapTest
     public void testSimpleKebabCase() throws Exception
     {
         final FirstNameBean input = new FirstNameBean("Bob");
-        ObjectMapper m = new ObjectMapper()
-                .setPropertyNamingStrategy(PropertyNamingStrategy.KEBAB_CASE);
+        ObjectMapper m = jsonMapperBuilder()
+                .propertyNamingStrategy(PropertyNamingStrategy.KEBAB_CASE)
+                .build();
 
         assertEquals(aposToQuotes("{'first-name':'Bob'}"), m.writeValueAsString(input));
 
         FirstNameBean result = m.readValue(aposToQuotes("{'first-name':'Billy'}"),
+                FirstNameBean.class);
+        assertEquals("Billy", result.firstName);
+    }
+    /*
+    /**********************************************************
+    /* Test methods for LOWER_DOT_CASE
+    /**********************************************************
+     */
+
+    public void testLowerCaseWithDotsStrategyStandAlone()
+    {
+        assertEquals("some.value",
+            PropertyNamingStrategy.LOWER_DOT_CASE.nameForField(null, null, "someValue"));
+        assertEquals("some.value",
+            PropertyNamingStrategy.LOWER_DOT_CASE.nameForField(null, null, "SomeValue"));
+        assertEquals("url",
+            PropertyNamingStrategy.LOWER_DOT_CASE.nameForField(null, null, "URL"));
+        assertEquals("url.stuff",
+            PropertyNamingStrategy.LOWER_DOT_CASE.nameForField(null, null, "URLStuff"));
+        assertEquals("some.url.stuff",
+            PropertyNamingStrategy.LOWER_DOT_CASE.nameForField(null, null, "SomeURLStuff"));
+    }
+
+    public void testSimpleLowerCaseWithDots() throws Exception
+    {
+        final ObjectMapper m = jsonMapperBuilder()
+            .propertyNamingStrategy(PropertyNamingStrategy.LOWER_DOT_CASE)
+            .build();
+
+        final FirstNameBean input = new FirstNameBean("Bob");
+        assertEquals(aposToQuotes("{'first.name':'Bob'}"), m.writeValueAsString(input));
+
+        FirstNameBean result = m.readValue(aposToQuotes("{'first.name':'Billy'}"),
                 FirstNameBean.class);
         assertEquals("Billy", result.firstName);
     }
@@ -348,8 +379,9 @@ public class TestNamingStrategyStd extends BaseMapTest
      */
     public void testNamingWithObjectNode() throws Exception
     {
-        ObjectMapper m = new ObjectMapper()
-            .setPropertyNamingStrategy(PropertyNamingStrategy.LOWER_CASE);
+        ObjectMapper m = jsonMapperBuilder()
+                .propertyNamingStrategy(PropertyNamingStrategy.LOWER_CASE)
+                .build();
         ClassWithObjectNodeField result =
             m.readValue(
                 "{ \"id\": \"1\", \"json\": { \"foo\": \"bar\", \"baz\": \"bing\" } }",
@@ -363,30 +395,32 @@ public class TestNamingStrategyStd extends BaseMapTest
 
     public void testExplicitRename() throws Exception
     {
-      ObjectMapper m = new ObjectMapper();
-      m.setPropertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE);
-      m.enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY);
-      // by default, renaming will not take place on explicitly named fields
-      assertEquals(aposToQuotes("{'firstName':'Peter','lastName':'Venkman','user_age':'35'}"),
-          m.writeValueAsString(new ExplicitBean()));
+        ObjectMapper m = jsonMapperBuilder()
+                .enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
+                .propertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE)
+                .build();
+        // by default, renaming will not take place on explicitly named fields
+        assertEquals(aposToQuotes("{'firstName':'Peter','lastName':'Venkman','user_age':'35'}"),
+                m.writeValueAsString(new ExplicitBean()));
 
-      m = new ObjectMapper();
-      m.setPropertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE);
-      m.enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY);
-      m.enable(MapperFeature.ALLOW_EXPLICIT_PROPERTY_RENAMING);
-      // w/ feature enabled, ALL property names should get re-written
-      assertEquals(aposToQuotes("{'first_name':'Peter','last_name':'Venkman','user_age':'35'}"),
-          m.writeValueAsString(new ExplicitBean()));
+        m = jsonMapperBuilder()
+                .propertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE)
+                .enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
+                .enable(MapperFeature.ALLOW_EXPLICIT_PROPERTY_RENAMING)
+                .build();
+        // w/ feature enabled, ALL property names should get re-written
+        assertEquals(aposToQuotes("{'first_name':'Peter','last_name':'Venkman','user_age':'35'}"),
+                m.writeValueAsString(new ExplicitBean()));
 
-      // test deserialization as well
-      ExplicitBean bean =
-          m.readValue(aposToQuotes("{'first_name':'Egon','last_name':'Spengler','user_age':'32'}"),
-              ExplicitBean.class);
+        // test deserialization as well
+        ExplicitBean bean =
+                m.readValue(aposToQuotes("{'first_name':'Egon','last_name':'Spengler','user_age':'32'}"),
+                        ExplicitBean.class);
 
-      assertNotNull(bean);
-      assertEquals("Egon", bean.userFirstName);
-      assertEquals("Spengler", bean.userLastName);
-      assertEquals("32", bean.userAge);
+        assertNotNull(bean);
+        assertEquals("Egon", bean.userFirstName);
+        assertEquals("Spengler", bean.userLastName);
+        assertEquals("32", bean.userAge);
     }
 
     // Also verify that "no naming strategy" should be ok

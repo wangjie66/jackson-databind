@@ -30,7 +30,7 @@ public class SimpleAbstractTypeResolver
     extends AbstractTypeResolver
     implements java.io.Serializable
 {
-    private static final long serialVersionUID = 8635483102371490919L;
+    private static final long serialVersionUID = 1L;
 
     /**
      * Mappings from super types to subtypes
@@ -53,14 +53,14 @@ public class SimpleAbstractTypeResolver
     {
         // Sanity checks, just in case someone tries to force typing...
         if (superType == subType) {
-            throw new IllegalArgumentException("Can not add mapping from class to itself");
+            throw new IllegalArgumentException("Cannot add mapping from class to itself");
         }
         if (!superType.isAssignableFrom(subType)) {
-            throw new IllegalArgumentException("Can not add mapping from class "+superType.getName()
+            throw new IllegalArgumentException("Cannot add mapping from class "+superType.getName()
                     +" to "+subType.getName()+", as latter is not a subtype of former");
         }
         if (!Modifier.isAbstract(superType.getModifiers())) {
-            throw new IllegalArgumentException("Can not add mapping from class "+superType.getName()
+            throw new IllegalArgumentException("Cannot add mapping from class "+superType.getName()
                     +" since it is not abstract");
         }
         _mappings.put(new ClassKey(superType), subType);
@@ -78,13 +78,6 @@ public class SimpleAbstractTypeResolver
         }
         // 09-Aug-2015, tatu: Instead of direct call via JavaType, better use TypeFactory
         return config.getTypeFactory().constructSpecializedType(type, dst);
-    }
-
-    @Override
-    @Deprecated
-    public JavaType resolveAbstractType(DeserializationConfig config, JavaType type){
-        // never materialize anything, so:
-        return null;
     }
 
     @Override

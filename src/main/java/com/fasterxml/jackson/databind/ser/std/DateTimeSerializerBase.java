@@ -1,11 +1,12 @@
 package com.fasterxml.jackson.databind.ser.std;
 
 import java.io.IOException;
-import java.lang.reflect.Type;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 
@@ -14,13 +15,10 @@ import com.fasterxml.jackson.core.JsonParser;
 
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.jsonFormatVisitors.*;
-import com.fasterxml.jackson.databind.ser.ContextualSerializer;
 import com.fasterxml.jackson.databind.util.StdDateFormat;
 
-@SuppressWarnings("serial")
 public abstract class DateTimeSerializerBase<T>
     extends StdScalarSerializer<T>
-    implements ContextualSerializer
 {
     /**
      * Flag that indicates that serialization must be done as the
@@ -35,12 +33,23 @@ public abstract class DateTimeSerializerBase<T>
      */
     protected final DateFormat _customFormat;
 
+    /**
+     * If {@link #_customFormat} is used, we will try to reuse instances in simplest
+     * possible form; thread-safe, but without overhead of <code>ThreadLocal</code>
+     * (not from code, but wrt retaining of possibly large number of format instances
+     * over all threads, properties with custom formats).
+     *
+     * @since 2.9
+     */
+    protected final AtomicReference<DateFormat> _reusedCustomFormat;
+
     protected DateTimeSerializerBase(Class<T> type,
             Boolean useTimestamp, DateFormat customFormat)
     {
         super(type);
         _useTimestamp = useTimestamp;
         _customFormat = customFormat;
+        _reusedCustomFormat = (customFormat == null) ? null : new AtomicReference<DateFormat>();
     }
 
     public abstract DateTimeSerializerBase<T> withFormat(Boolean timestamp, DateFormat customFormat);
@@ -49,9 +58,8 @@ public abstract class DateTimeSerializerBase<T>
     public JsonSerializer<?> createContextual(SerializerProvider serializers,
             BeanProperty property) throws JsonMappingException
     {
-        if (property == null) {
-            return this;
-        }
+        // Note! Should not skip if `property` null since that'd skip check
+        // for config overrides, in case of root value
         JsonFormat.Value format = findFormatOverrides(serializers, property, handledType());
         if (format == null) {
             return this;
@@ -101,10 +109,9 @@ public abstract class DateTimeSerializerBase<T>
         //    mechanism for changing `DateFormat` instances (or even clone()ing)
         //    So: require it be `SimpleDateFormat`; can't config other types
         if (!(df0 instanceof SimpleDateFormat)) {
-//            serializers.reportBadDefinition(handledType(), String.format(
-            serializers.reportMappingProblem(
-"Configured `DateFormat` (%s) not a `SimpleDateFormat`; can not configure `Locale` or `TimeZone`",
-df0.getClass().getName());
+            serializers.reportBadDefinition(handledType(), String.format(
+"Configured `DateFormat` (%s) not a `SimpleDateFormat`; cannot configure `Locale` or `TimeZone`",
+df0.getClass().getName()));
         }
         SimpleDateFormat df = (SimpleDateFormat) df0;
         if (hasLocale) {
@@ -127,26 +134,15 @@ df0.getClass().getName());
     /**********************************************************
      */
 
-    @Deprecated
-    @Override
-    public boolean isEmpty(T value) {
-        // let's assume "null date" (timestamp 0) qualifies for empty
-        return (value == null) || (_timestamp(value) == 0L);
-    }
-
     @Override
     public boolean isEmpty(SerializerProvider serializers, T value) {
-        // let's assume "null date" (timestamp 0) qualifies for empty
-        return (value == null) || (_timestamp(value) == 0L);
+        // 09-Mar-2017, tatu: as per [databind#1550] timestamp 0 is NOT "empty"; but
+        //   with versions up to 2.8.x this was the case. Fixed for 2.9.
+//        return _timestamp(value) == 0L;
+        return false;
     }
-    
+
     protected abstract long _timestamp(T value);
-    
-    @Override
-    public JsonNode getSchema(SerializerProvider serializers, Type typeHint) {
-        //todo: (ryan) add a format for the date in the schema?
-        return createSchemaNode(_asTimestamp(serializers) ? "number" : "string", true);
-    }
 
     @Override
     public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws JsonMappingException
@@ -194,5 +190,30 @@ df0.getClass().getName());
         } else {
             visitStringFormat(visitor, typeHint, JsonValueFormat.DATE_TIME);
         }
+    }
+
+    /**
+     * @since 2.9
+     */
+    protected void _serializeAsString(Date value, JsonGenerator g, SerializerProvider provider) throws IOException
+    {
+        if (_customFormat == null) {
+            provider.defaultSerializeDateValue(value, g);
+            return;
+        }
+
+        // 19-Jul-2017, tatu: Here we will try a simple but (hopefully) effective mechanism for
+        //    reusing formatter instance. This is our second attempt, after initially trying simple
+        //    synchronization (which turned out to be bottleneck for some users in production...).
+        //    While `ThreadLocal` could alternatively be used, it is likely that it would lead to
+        //    higher memory footprint, but without much upside -- if we can not reuse, we'll just
+        //    clone(), which has some overhead but not drastic one.
+        
+        DateFormat f = _reusedCustomFormat.getAndSet(null);
+        if (f == null) {
+            f = (DateFormat) _customFormat.clone();
+        }
+        g.writeString(f.format(value));
+        _reusedCustomFormat.compareAndSet(null, f);
     }
 }

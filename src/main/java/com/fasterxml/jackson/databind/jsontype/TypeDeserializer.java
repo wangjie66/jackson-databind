@@ -17,7 +17,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo.As;
  *<p>
  * Separate deserialization methods are needed because serialized
  * form for inclusion mechanism {@link As#PROPERTY}
- * is slighty different if value is not expressed as JSON Object:
+ * is slightly different if value is not expressed as JSON Object:
  * and as such both type deserializer and serializer need to
  * JSON Object form (array, object or other (== scalar)) being used.
  */
@@ -66,7 +66,7 @@ public abstract class TypeDeserializer
     /**
      * Accessor for "default implementation" type; optionally defined
      * class to use in cases where type id is not
-     * accessible for some reason (either missing, or can not be
+     * accessible for some reason (either missing, or cannot be
      * resolved)
      */
     public abstract Class<?> getDefaultImpl();
@@ -141,7 +141,7 @@ public abstract class TypeDeserializer
     public static Object deserializeIfNatural(JsonParser p, DeserializationContext ctxt,
             Class<?> base) throws IOException
     {
-        JsonToken t = p.getCurrentToken();
+        JsonToken t = p.currentToken();
         if (t == null) {
             return null;
         }

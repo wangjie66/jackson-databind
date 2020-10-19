@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.JsonSerializable;
 import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
 
 /**
@@ -14,12 +15,35 @@ import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
  * The main addition here is that we declare that sub-classes must
  * implement {@link JsonSerializable}.
  * This simplifies object mapping aspects a bit, as no external serializers are needed.
+ *<p>
+ * Note that support for {@link java.io.Serializable} is added here and so all subtypes
+ * are fully JDK serializable: but also note that serialization is as JSON and should
+ * only be used for interoperability purposes where other approaches are not available.
  */
 public abstract class BaseJsonNode
     extends JsonNode
-    implements JsonSerializable
+    implements java.io.Serializable
 {
+    private static final long serialVersionUID = 3L;
+
+    // Simplest way is by using a helper
+    Object writeReplace() {
+        return NodeSerialization.from(this);
+    }
+
     protected BaseJsonNode() { }
+
+    /*
+    /**********************************************************
+    /* Defaulting for introspection
+    /**********************************************************
+     */
+    
+    @Override
+    public boolean isMissingNode() { return false; }
+
+    @Override
+    public boolean isEmbeddedValue() { return false; }
 
     /*
     /**********************************************************
@@ -37,8 +61,26 @@ public abstract class BaseJsonNode
         return value;
     }
 
-    // Also, force (re)definition (2.7)
+    // Also, force (re)definition
     @Override public abstract int hashCode();
+
+    /*
+    /**********************************************************************
+    /* Improved required-ness checks for standard JsonNode implementations
+    /**********************************************************************
+     */
+
+    @Override
+    public JsonNode required(String fieldName) {
+        return _reportRequiredViolation("Node of type `%s` has no fields",
+                getClass().getSimpleName());
+    }
+
+    @Override
+    public JsonNode required(int index) {
+        return _reportRequiredViolation("Node of type `%s` has no indexed values",
+                getClass().getSimpleName());
+    }
 
     /*
     /**********************************************************
@@ -47,15 +89,10 @@ public abstract class BaseJsonNode
      */
 
     @Override
-    public JsonParser traverse() {
-        return new TreeTraversingParser(this);
+    public JsonParser traverse(ObjectReadContext readCtxt) {
+        return new TreeTraversingParser(this, readCtxt);
     }
 
-    @Override
-    public JsonParser traverse(ObjectCodec codec) {
-        return new TreeTraversingParser(this, codec);
-    }
-    
     /**
      * Method that can be used for efficient type detection
      * when using stream abstraction for traversing nodes.
@@ -86,16 +123,39 @@ public abstract class BaseJsonNode
      * Method called to serialize node instances using given generator.
      */
     @Override
-    public abstract void serialize(JsonGenerator jgen, SerializerProvider provider)
-        throws IOException, JsonProcessingException;
+    public abstract void serialize(JsonGenerator jgen, SerializerProvider provider) throws IOException;
 
     /**
      * Type information is needed, even if JsonNode instances are "plain" JSON,
      * since they may be mixed with other types.
      */
-   @Override
+    @Override
     public abstract void serializeWithType(JsonGenerator jgen, SerializerProvider provider,
-            TypeSerializer typeSer)
-        throws IOException, JsonProcessingException;
-}
+            TypeSerializer typeSer)  throws IOException;
 
+    /*
+   /**********************************************************
+   /* Standard method overrides
+   /**********************************************************
+    */
+
+   @Override
+   public String toString() {
+       try {
+           return JsonMapper.shared().writeValueAsString(this);
+       } catch (IOException e) { // should never occur
+           throw new RuntimeException(e);
+       }
+   }
+
+   @Override
+   public String toPrettyString() {
+       try {
+           return JsonMapper.shared()
+                   .writerWithDefaultPrettyPrinter()
+                   .writeValueAsString(this);
+       } catch (IOException e) { // should never occur
+           throw new RuntimeException(e);
+       }
+   }
+}

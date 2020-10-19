@@ -1,13 +1,10 @@
 package com.fasterxml.jackson.databind.deser.impl;
 
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Member;
-import java.lang.reflect.Type;
 import java.util.*;
 
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
-import com.fasterxml.jackson.databind.deser.CreatorProperty;
 import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
 import com.fasterxml.jackson.databind.deser.ValueInstantiator;
 import com.fasterxml.jackson.databind.deser.std.StdValueInstantiator;
@@ -18,45 +15,41 @@ import com.fasterxml.jackson.databind.util.ClassUtil;
  * Container class for storing information on creators (based on annotations,
  * visibility), to be able to build actual instantiator later on.
  */
-public class CreatorCollector {
-    // Since 2.5
+public class CreatorCollector
+{
     protected final static int C_DEFAULT = 0;
     protected final static int C_STRING = 1;
     protected final static int C_INT = 2;
     protected final static int C_LONG = 3;
-    protected final static int C_DOUBLE = 4;
-    protected final static int C_BOOLEAN = 5;
-    protected final static int C_DELEGATE = 6;
-    protected final static int C_PROPS = 7;
-    protected final static int C_ARRAY_DELEGATE = 8;
+    protected final static int C_BIG_INTEGER = 4;
+    protected final static int C_DOUBLE = 5;
+    protected final static int C_BIG_DECIMAL = 6;
+    protected final static int C_BOOLEAN = 7;
+    protected final static int C_DELEGATE = 8;
+    protected final static int C_PROPS = 9;
+    protected final static int C_ARRAY_DELEGATE = 10;
 
     protected final static String[] TYPE_DESCS = new String[] { "default",
-            "from-String", "from-int", "from-long", "from-double",
-            "from-boolean", "delegate", "property-based" };
+            "from-String", "from-int", "from-long", "from-big-integer", "from-double",
+            "from-big-decimal", "from-boolean", "delegate", "property-based", "array-delegate"
+    };
 
-    /// Type of bean being created
+    // Type of bean being created
     final protected BeanDescription _beanDesc;
 
     final protected boolean _canFixAccess;
 
-    /**
-     * @since 2.7
-     */
     final protected boolean _forceAccess;
 
     /**
      * Set of creators we have collected so far
-     * 
-     * @since 2.5
      */
-    protected final AnnotatedWithParams[] _creators = new AnnotatedWithParams[9];
+    final protected AnnotatedWithParams[] _creators = new AnnotatedWithParams[11];
 
     /**
      * Bitmask of creators that were explicitly marked as creators; false for
      * auto-detected (ones included base on naming and/or visibility, not
      * annotation)
-     * 
-     * @since 2.5
      */
     protected int _explicitCreators = 0;
 
@@ -69,11 +62,10 @@ public class CreatorCollector {
 
     protected SettableBeanProperty[] _propertyBasedArgs;
 
-    protected AnnotatedParameter _incompleteParameter;
-
     /*
-     * /********************************************************** /* Life-cycle
-     * /**********************************************************
+    /**********************************************************
+    /* Life-cycle
+    /**********************************************************
      */
 
     public CreatorCollector(BeanDescription beanDesc, MapperConfig<?> config) {
@@ -83,22 +75,18 @@ public class CreatorCollector {
                 .isEnabled(MapperFeature.OVERRIDE_PUBLIC_ACCESS_MODIFIERS);
     }
 
-    public ValueInstantiator constructValueInstantiator(
-            DeserializationConfig config) {
-        final JavaType delegateType = _computeDelegateType(
+    public ValueInstantiator constructValueInstantiator(DeserializationContext ctxt)
+        throws JsonMappingException
+    {
+        final DeserializationConfig config = ctxt.getConfig();
+        final JavaType delegateType = _computeDelegateType(ctxt,
                 _creators[C_DELEGATE], _delegateArgs);
-        final JavaType arrayDelegateType = _computeDelegateType(
+        final JavaType arrayDelegateType = _computeDelegateType(ctxt,
                 _creators[C_ARRAY_DELEGATE], _arrayDelegateArgs);
         final JavaType type = _beanDesc.getType();
 
-        // 11-Jul-2016, tatu: Earlier optimization by replacing the whole
-        // instantiator did not
-        // work well, so let's replace by lower-level check:
-        AnnotatedWithParams defaultCtor = StdTypeConstructor
-                .tryToOptimize(_creators[C_DEFAULT]);
-
         StdValueInstantiator inst = new StdValueInstantiator(config, type);
-        inst.configureFromObjectSettings(defaultCtor, _creators[C_DELEGATE],
+        inst.configureFromObjectSettings(_creators[C_DEFAULT], _creators[C_DELEGATE],
                 delegateType, _delegateArgs, _creators[C_PROPS],
                 _propertyBasedArgs);
         inst.configureFromArraySettings(_creators[C_ARRAY_DELEGATE],
@@ -106,15 +94,17 @@ public class CreatorCollector {
         inst.configureFromStringCreator(_creators[C_STRING]);
         inst.configureFromIntCreator(_creators[C_INT]);
         inst.configureFromLongCreator(_creators[C_LONG]);
+        inst.configureFromBigIntegerCreator(_creators[C_BIG_INTEGER]);
         inst.configureFromDoubleCreator(_creators[C_DOUBLE]);
+        inst.configureFromBigDecimalCreator(_creators[C_BIG_DECIMAL]);
         inst.configureFromBooleanCreator(_creators[C_BOOLEAN]);
-        inst.configureIncompleteParameter(_incompleteParameter);
         return inst;
     }
 
     /*
-     * /********************************************************** /* Setters
-     * /**********************************************************
+    /**********************************************************
+    /* Setters
+    /**********************************************************
      */
 
     /**
@@ -131,8 +121,7 @@ public class CreatorCollector {
         _creators[C_DEFAULT] = _fixAccess(creator);
     }
 
-    public void addStringCreator(AnnotatedWithParams creator,
-            boolean explicit) {
+    public void addStringCreator(AnnotatedWithParams creator, boolean explicit) {
         verifyNonDup(creator, C_STRING, explicit);
     }
 
@@ -144,19 +133,27 @@ public class CreatorCollector {
         verifyNonDup(creator, C_LONG, explicit);
     }
 
-    public void addDoubleCreator(AnnotatedWithParams creator,
-            boolean explicit) {
+    public void addBigIntegerCreator(AnnotatedWithParams creator, boolean explicit) {
+        verifyNonDup(creator, C_BIG_INTEGER, explicit);
+    }
+
+    public void addDoubleCreator(AnnotatedWithParams creator, boolean explicit) {
         verifyNonDup(creator, C_DOUBLE, explicit);
     }
 
-    public void addBooleanCreator(AnnotatedWithParams creator,
-            boolean explicit) {
+    public void addBigDecimalCreator(AnnotatedWithParams creator, boolean explicit) {
+        verifyNonDup(creator, C_BIG_DECIMAL, explicit);
+    }
+
+    public void addBooleanCreator(AnnotatedWithParams creator, boolean explicit) {
         verifyNonDup(creator, C_BOOLEAN, explicit);
     }
 
     public void addDelegatingCreator(AnnotatedWithParams creator,
-            boolean explicit, SettableBeanProperty[] injectables) {
-        if (creator.getParameterType(0).isCollectionLikeType()) {
+            boolean explicit, SettableBeanProperty[] injectables,
+            int delegateeIndex)
+    {
+        if (creator.getParameterType(delegateeIndex).isCollectionLikeType()) {
             if (verifyNonDup(creator, C_ARRAY_DELEGATE, explicit)) {
                 _arrayDelegateArgs = injectables;
             }
@@ -168,7 +165,8 @@ public class CreatorCollector {
     }
 
     public void addPropertyCreator(AnnotatedWithParams creator,
-            boolean explicit, SettableBeanProperty[] properties) {
+            boolean explicit, SettableBeanProperty[] properties)
+    {
         if (verifyNonDup(creator, C_PROPS, explicit)) {
             // Better ensure we have no duplicate names either...
             if (properties.length > 1) {
@@ -177,15 +175,14 @@ public class CreatorCollector {
                     String name = properties[i].getName();
                     // Need to consider Injectables, which may not have
                     // a name at all, and need to be skipped
-                    if (name.length() == 0
-                            && properties[i].getInjectableValueId() != null) {
+                    if (name.isEmpty() && (properties[i].getInjectableValueId() != null)) {
                         continue;
                     }
                     Integer old = names.put(name, Integer.valueOf(i));
                     if (old != null) {
                         throw new IllegalArgumentException(String.format(
-                                "Duplicate creator property \"%s\" (index %s vs %d)",
-                                name, old, i));
+                                "Duplicate creator property \"%s\" (index %s vs %d) for type %s ",
+                                name, old, i, ClassUtil.nameOf(_beanDesc.getBeanClass())));
                     }
                 }
             }
@@ -193,54 +190,10 @@ public class CreatorCollector {
         }
     }
 
-    public void addIncompeteParameter(AnnotatedParameter parameter) {
-        if (_incompleteParameter == null) {
-            _incompleteParameter = parameter;
-        }
-    }
-
-    // Bunch of methods deprecated in 2.5, to be removed from 2.6 or later
-
-    @Deprecated // since 2.5
-    public void addStringCreator(AnnotatedWithParams creator) {
-        addStringCreator(creator, false);
-    }
-
-    @Deprecated // since 2.5
-    public void addIntCreator(AnnotatedWithParams creator) {
-        addBooleanCreator(creator, false);
-    }
-
-    @Deprecated // since 2.5
-    public void addLongCreator(AnnotatedWithParams creator) {
-        addBooleanCreator(creator, false);
-    }
-
-    @Deprecated // since 2.5
-    public void addDoubleCreator(AnnotatedWithParams creator) {
-        addBooleanCreator(creator, false);
-    }
-
-    @Deprecated // since 2.5
-    public void addBooleanCreator(AnnotatedWithParams creator) {
-        addBooleanCreator(creator, false);
-    }
-
-    @Deprecated // since 2.5
-    public void addDelegatingCreator(AnnotatedWithParams creator,
-            CreatorProperty[] injectables) {
-        addDelegatingCreator(creator, false, injectables);
-    }
-
-    @Deprecated // since 2.5
-    public void addPropertyCreator(AnnotatedWithParams creator,
-            CreatorProperty[] properties) {
-        addPropertyCreator(creator, false, properties);
-    }
-
     /*
-     * /********************************************************** /* Accessors
-     * /**********************************************************
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
      */
 
     /**
@@ -265,12 +218,15 @@ public class CreatorCollector {
     }
 
     /*
-     * /********************************************************** /* Helper
-     * methods /**********************************************************
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
      */
 
-    private JavaType _computeDelegateType(AnnotatedWithParams creator,
-            SettableBeanProperty[] delegateArgs) {
+    private JavaType _computeDelegateType(DeserializationContext ctxt,
+            AnnotatedWithParams creator, SettableBeanProperty[] delegateArgs)
+        throws JsonMappingException
+    {
         if (!_hasNonDefaultCreator || (creator == null)) {
             return null;
         }
@@ -284,7 +240,28 @@ public class CreatorCollector {
                 }
             }
         }
-        return creator.getParameterType(ix);
+        final DeserializationConfig config = ctxt.getConfig();
+
+        // 03-May-2018, tatu: need to check possible annotation-based
+        //   custom deserializer [databind#2012],
+        //   type refinement(s) [databind#2016]. 
+        JavaType baseType = creator.getParameterType(ix);
+        AnnotationIntrospector intr = config.getAnnotationIntrospector();
+        if (intr != null) {
+            AnnotatedParameter delegate = creator.getParameter(ix);
+            
+            // First: custom deserializer(s):
+            Object deserDef = intr.findDeserializer(config, delegate);
+            if (deserDef != null) {
+                JsonDeserializer<Object> deser = ctxt.deserializerInstance(delegate, deserDef);
+                baseType = baseType.withValueHandler(deser);
+            } else {
+                // Second: type refinement(s), if no explicit deserializer was located
+                baseType = intr.refineDeserializationType(config,
+                        delegate, baseType);
+            }
+        }
+        return baseType;
     }
 
     private <T extends AnnotatedMember> T _fixAccess(T member) {
@@ -325,31 +302,31 @@ public class CreatorCollector {
                 Class<?> newType = newOne.getRawParameterType(0);
 
                 if (oldType == newType) {
-                    // 13-Jul-2016, tatu: One more thing to check; since Enum
-                    // classes always have
-                    // implicitly created `valueOf()`, let's resolve in favor of
-                    // other implicit
-                    // creator (`fromString()`)
+                    // 13-Jul-2016, tatu: One more thing to check; since Enum classes
+                    //   always have implicitly created `valueOf()`, let's resolve in
+                    //   favor of other implicit creator (`fromString()`)
                     if (_isEnumValueOf(newOne)) {
                         return false; // ignore
                     }
                     if (_isEnumValueOf(oldOne)) {
                         ;
                     } else {
-                        throw new IllegalArgumentException(String.format(
-                                "Conflicting %s creators: already had %s creator %s, encountered another: %s",
-                                TYPE_DESCS[typeIndex],
-                                explicit ? "explicitly marked"
-                                        : "implicitly discovered",
-                                oldOne, newOne));
+                        _reportDuplicateCreator(typeIndex, explicit, oldOne, newOne);
                     }
                 }
                 // otherwise, which one to choose?
                 else if (newType.isAssignableFrom(oldType)) {
                     // new type more generic, use old
                     return false;
+                } else if (oldType.isAssignableFrom(newType)) {
+                    // new type more specific, use it
+                    ;
+                } else {
+                    // 02-May-2020, tatu: Should this only result in exception if both
+                    //   explicit? Doing so could lead to arbitrary choice between
+                    //   multiple implicit creators tho?
+                    _reportDuplicateCreator(typeIndex, explicit, oldOne, newOne);
                 }
-                // new type more specific, use it
             }
         }
         if (explicit) {
@@ -359,179 +336,22 @@ public class CreatorCollector {
         return true;
     }
 
+    // @since 2.12
+    protected void _reportDuplicateCreator(int typeIndex, boolean explicit,
+            AnnotatedWithParams oldOne, AnnotatedWithParams newOne) {
+        throw new IllegalArgumentException(String.format(
+                "Conflicting %s creators: already had %s creator %s, encountered another: %s",
+                TYPE_DESCS[typeIndex],
+                explicit ? "explicitly marked"
+                        : "implicitly discovered",
+                oldOne, newOne));
+    }
+    
     /**
      * Helper method for recognizing `Enum.valueOf()` factory method
-     *
-     * @since 2.8.1
      */
     protected boolean _isEnumValueOf(AnnotatedWithParams creator) {
-        return creator.getDeclaringClass().isEnum()
+        return ClassUtil.isEnumType(creator.getDeclaringClass())
                 && "valueOf".equals(creator.getName());
-    }
-
-    /*
-    /**********************************************************
-    /* Helper class(es)
-    /**********************************************************
-     */
-
-    /**
-     * Replacement for default constructor to use for a small set of
-     * "well-known" types.
-     * <p>
-     * Note: replaces earlier <code>Vanilla</code>
-     * <code>ValueInstantiator</code> implementation
-     *
-     * @since 2.8.1 (replacing earlier <code>Vanilla</code> instantiator
-     */
-    protected final static class StdTypeConstructor extends AnnotatedWithParams
-            implements java.io.Serializable {
-        private static final long serialVersionUID = 1L;
-
-        public final static int TYPE_ARRAY_LIST = 1;
-        public final static int TYPE_HASH_MAP = 2;
-        public final static int TYPE_LINKED_HASH_MAP = 3;
-
-        private final AnnotatedWithParams _base;
-
-        private final int _type;
-
-        public StdTypeConstructor(AnnotatedWithParams base, int t) {
-            super(base, null);
-            _base = base;
-            _type = t;
-        }
-
-        public static AnnotatedWithParams tryToOptimize(
-                AnnotatedWithParams src) {
-            if (src != null) {
-                final Class<?> rawType = src.getDeclaringClass();
-                if (rawType == List.class || rawType == ArrayList.class) {
-                    return new StdTypeConstructor(src, TYPE_ARRAY_LIST);
-                }
-                if (rawType == LinkedHashMap.class) {
-                    return new StdTypeConstructor(src, TYPE_LINKED_HASH_MAP);
-                }
-                if (rawType == HashMap.class) {
-                    return new StdTypeConstructor(src, TYPE_HASH_MAP);
-                }
-            }
-            return src;
-        }
-
-        protected final Object _construct() {
-            switch (_type) {
-            case TYPE_ARRAY_LIST:
-                return new ArrayList<Object>();
-            case TYPE_LINKED_HASH_MAP:
-                return new LinkedHashMap<String, Object>();
-            case TYPE_HASH_MAP:
-                return new HashMap<String, Object>();
-            }
-            throw new IllegalStateException("Unknown type " + _type);
-        }
-
-        @Override
-        public int getParameterCount() {
-            return _base.getParameterCount();
-        }
-
-        @Override
-        public Class<?> getRawParameterType(int index) {
-            return _base.getRawParameterType(index);
-        }
-
-        @Override
-        public JavaType getParameterType(int index) {
-            return _base.getParameterType(index);
-        }
-
-        @Override
-        @Deprecated
-        public Type getGenericParameterType(int index) {
-            return _base.getGenericParameterType(index);
-        }
-
-        @Override
-        public Object call() throws Exception {
-            return _construct();
-        }
-
-        @Override
-        public Object call(Object[] args) throws Exception {
-            return _construct();
-        }
-
-        @Override
-        public Object call1(Object arg) throws Exception {
-            return _construct();
-        }
-
-        @Override
-        public Class<?> getDeclaringClass() {
-            return _base.getDeclaringClass();
-        }
-
-        @Override
-        public Member getMember() {
-            return _base.getMember();
-        }
-
-        @Override
-        public void setValue(Object pojo, Object value)
-                throws UnsupportedOperationException, IllegalArgumentException {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Object getValue(Object pojo)
-                throws UnsupportedOperationException, IllegalArgumentException {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Annotated withAnnotations(AnnotationMap fallback) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public AnnotatedElement getAnnotated() {
-            return _base.getAnnotated();
-        }
-
-        @Override
-        protected int getModifiers() {
-            return _base.getMember().getModifiers();
-        }
-
-        @Override
-        public String getName() {
-            return _base.getName();
-        }
-
-        @Override
-        public JavaType getType() {
-            return _base.getType();
-        }
-
-        @Override
-        public Class<?> getRawType() {
-            return _base.getRawType();
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            return (o == this);
-        }
-
-        @Override
-        public int hashCode() {
-            return _base.hashCode();
-        }
-
-        @Override
-        public String toString() {
-            return _base.toString();
-        }
     }
 }

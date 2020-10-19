@@ -2,11 +2,12 @@ package com.fasterxml.jackson.databind.deser.std;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
 import com.fasterxml.jackson.databind.deser.*;
-import com.fasterxml.jackson.databind.introspect.AnnotatedParameter;
 import com.fasterxml.jackson.databind.introspect.AnnotatedWithParams;
 
 /**
@@ -17,19 +18,13 @@ import com.fasterxml.jackson.databind.introspect.AnnotatedWithParams;
 @JacksonStdImpl
 public class StdValueInstantiator
     extends ValueInstantiator
-    implements java.io.Serializable
 {
-    private static final long serialVersionUID = 1L;
-
     /**
      * Type of values that are instantiated; used
      * for error reporting purposes.
      */
     protected final String _valueTypeDesc;
 
-    /**
-     * @since 2.8
-     */
     protected final Class<?> _valueClass;
 
     // // // Default (no-args) construction
@@ -46,7 +41,7 @@ public class StdValueInstantiator
     protected SettableBeanProperty[] _constructorArguments;
 
     // // // Delegate construction
-    
+
     protected JavaType _delegateType;
     protected AnnotatedWithParams _delegateCreator;
     protected SettableBeanProperty[] _delegateArguments;
@@ -56,36 +51,31 @@ public class StdValueInstantiator
     protected JavaType _arrayDelegateType;
     protected AnnotatedWithParams _arrayDelegateCreator;
     protected SettableBeanProperty[] _arrayDelegateArguments;
-    
+
     // // // Scalar construction
 
     protected AnnotatedWithParams _fromStringCreator;
     protected AnnotatedWithParams _fromIntCreator;
     protected AnnotatedWithParams _fromLongCreator;
+    protected AnnotatedWithParams _fromBigIntegerCreator;
     protected AnnotatedWithParams _fromDoubleCreator;
+    protected AnnotatedWithParams _fromBigDecimalCreator;
     protected AnnotatedWithParams _fromBooleanCreator;
 
-    // // // Incomplete creator
-    protected AnnotatedParameter  _incompleteParameter;
-    
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
      */
-
-    /**
-     * @deprecated Since 2.7 use constructor that takes {@link JavaType} instead
-     */
-    @Deprecated
-    public StdValueInstantiator(DeserializationConfig config, Class<?> valueType) {
-        _valueTypeDesc = (valueType == null) ? "UNKNOWN TYPE" : valueType.getName();
-        _valueClass = (valueType == null) ? Object.class : valueType;
-    }
 
     public StdValueInstantiator(DeserializationConfig config, JavaType valueType) {
-        _valueTypeDesc = (valueType == null) ? "UNKNOWN TYPE" : valueType.toString();
-        _valueClass = (valueType == null) ? Object.class : valueType.getRawClass();
+        if (valueType == null) {
+            _valueTypeDesc = "UNKNOWN TYPE";
+            _valueClass = Object.class;
+        } else {
+            _valueTypeDesc = valueType.toString();
+            _valueClass = valueType.getRawClass();
+        }
     }
 
     /**
@@ -109,12 +99,22 @@ public class StdValueInstantiator
         _arrayDelegateType = src._arrayDelegateType;
         _arrayDelegateCreator = src._arrayDelegateCreator;
         _arrayDelegateArguments = src._arrayDelegateArguments;
-        
+
         _fromStringCreator = src._fromStringCreator;
         _fromIntCreator = src._fromIntCreator;
         _fromLongCreator = src._fromLongCreator;
+        _fromBigIntegerCreator = src._fromBigIntegerCreator;
         _fromDoubleCreator = src._fromDoubleCreator;
+        _fromBigDecimalCreator = src._fromBigDecimalCreator;
         _fromBooleanCreator = src._fromBooleanCreator;
+    }
+
+    @Override
+    public ValueInstantiator createContextual(DeserializationContext ctxt,
+            BeanDescription beanDesc)
+        throws JsonMappingException
+    {
+        return this;
     }
 
     /**
@@ -156,22 +156,22 @@ public class StdValueInstantiator
         _fromLongCreator = creator;
     }
 
+    public void configureFromBigIntegerCreator(AnnotatedWithParams creator) { _fromBigIntegerCreator = creator; }
+
     public void configureFromDoubleCreator(AnnotatedWithParams creator) {
         _fromDoubleCreator = creator;
     }
+
+    public void configureFromBigDecimalCreator(AnnotatedWithParams creator) { _fromBigDecimalCreator = creator; }
 
     public void configureFromBooleanCreator(AnnotatedWithParams creator) {
         _fromBooleanCreator = creator;
     }
 
-    public void configureIncompleteParameter(AnnotatedParameter parameter) {
-        _incompleteParameter = parameter;
-    }
-    
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Public API implementation; metadata
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -200,9 +200,15 @@ public class StdValueInstantiator
     }
 
     @Override
+    public boolean canCreateFromBigInteger() { return _fromBigIntegerCreator != null; }
+
+    @Override
     public boolean canCreateFromDouble() {
         return (_fromDoubleCreator != null);
     }
+
+    @Override
+    public boolean canCreateFromBigDecimal() { return _fromBigDecimalCreator != null; }
 
     @Override
     public boolean canCreateFromBoolean() {
@@ -252,13 +258,13 @@ public class StdValueInstantiator
     public SettableBeanProperty[] getFromObjectArguments(DeserializationConfig config) {
         return _constructorArguments;
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Public API implementation; instantiation from JSON Object
-    /**********************************************************
+    /**********************************************************************
      */
-    
+
     @Override
     public Object createUsingDefault(DeserializationContext ctxt) throws IOException
     {
@@ -267,9 +273,8 @@ public class StdValueInstantiator
         }
         try {
             return _defaultCreator.call();
-        } catch (Throwable t) {
-            return ctxt.handleInstantiationProblem(_defaultCreator.getDeclaringClass(),
-                    null, rewrapCtorProblem(ctxt, t));
+        } catch (Exception e) { // 19-Apr-2017, tatu: Let's not catch Errors, just Exceptions
+            return ctxt.handleInstantiationProblem(_valueClass, null, rewrapCtorProblem(ctxt, e));
         }
     }
 
@@ -281,9 +286,8 @@ public class StdValueInstantiator
         }
         try {
             return _withArgsCreator.call(args);
-        } catch (Throwable t) {
-            return ctxt.handleInstantiationProblem(_withArgsCreator.getDeclaringClass(),
-                    args, rewrapCtorProblem(ctxt, t));
+        } catch (Exception e) { // 19-Apr-2017, tatu: Let's not catch Errors, just Exceptions
+            return ctxt.handleInstantiationProblem(_valueClass, args, rewrapCtorProblem(ctxt, e));
         }
     }
 
@@ -312,25 +316,25 @@ public class StdValueInstantiator
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Public API implementation; instantiation from JSON scalars
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
     public Object createFromString(DeserializationContext ctxt, String value) throws IOException
     {
-        if (_fromStringCreator == null) {
-            return _createFromStringFallbacks(ctxt, value);
+        if (_fromStringCreator != null) {
+            try {
+                return _fromStringCreator.call1(value);
+            } catch (Throwable t) {
+                return ctxt.handleInstantiationProblem(_fromStringCreator.getDeclaringClass(),
+                        value, rewrapCtorProblem(ctxt, t));
+            }
         }
-        try {
-            return _fromStringCreator.call1(value);
-        } catch (Throwable t) {
-            return ctxt.handleInstantiationProblem(_fromStringCreator.getDeclaringClass(),
-                    value, rewrapCtorProblem(ctxt, t));
-        }
+        return super.createFromString(ctxt, value);
     }
-    
+
     @Override
     public Object createFromInt(DeserializationContext ctxt, int value) throws IOException
     {
@@ -354,37 +358,106 @@ public class StdValueInstantiator
                         arg, rewrapCtorProblem(ctxt, t0));
             }
         }
+
+        if (_fromBigIntegerCreator != null) {
+            Object arg = BigInteger.valueOf(value);
+            try {
+                return _fromBigIntegerCreator.call1(arg);
+            } catch (Throwable t0) {
+                return ctxt.handleInstantiationProblem(_fromBigIntegerCreator.getDeclaringClass(),
+                                                       arg, rewrapCtorProblem(ctxt, t0)
+                );
+            }
+        }
+
         return super.createFromInt(ctxt, value);
     }
 
     @Override
     public Object createFromLong(DeserializationContext ctxt, long value) throws IOException
     {
-        if (_fromLongCreator == null) {
-            return super.createFromLong(ctxt, value);
+        if (_fromLongCreator != null) {
+            Object arg = Long.valueOf(value);
+            try {
+                return _fromLongCreator.call1(arg);
+            } catch (Throwable t0) {
+                return ctxt.handleInstantiationProblem(_fromLongCreator.getDeclaringClass(),
+                                                       arg,
+                                                       rewrapCtorProblem(ctxt, t0)
+                );
+            }
         }
-        Object arg = Long.valueOf(value);
-        try {
-            return _fromLongCreator.call1(arg);
-        } catch (Throwable t0) {
-            return ctxt.handleInstantiationProblem(_fromLongCreator.getDeclaringClass(),
-                    arg, rewrapCtorProblem(ctxt, t0));
+
+        if (_fromBigIntegerCreator != null) {
+            Object arg = BigInteger.valueOf(value);
+            try {
+                return _fromBigIntegerCreator.call1(arg);
+            } catch (Throwable t0) {
+                return ctxt.handleInstantiationProblem(_fromBigIntegerCreator.getDeclaringClass(),
+                                                       arg, rewrapCtorProblem(ctxt, t0)
+                );
+            }
         }
+
+        return super.createFromLong(ctxt, value);
+    }
+
+    @Override
+    public Object createFromBigInteger(DeserializationContext ctxt, BigInteger value) throws IOException
+    {
+        if (_fromBigDecimalCreator != null) {
+            try {
+                return _fromBigIntegerCreator.call1(value);
+            } catch (Throwable t) {
+                return ctxt.handleInstantiationProblem(_fromBigIntegerCreator.getDeclaringClass(),
+                                                       value, rewrapCtorProblem(ctxt, t)
+                );
+            }
+        }
+
+        return super.createFromBigInteger(ctxt, value);
     }
 
     @Override
     public Object createFromDouble(DeserializationContext ctxt, double value) throws IOException
     {
-        if (_fromDoubleCreator == null) {
-            return super.createFromDouble(ctxt, value);
+        if(_fromDoubleCreator != null) {
+            Object arg = Double.valueOf(value);
+            try {
+                return _fromDoubleCreator.call1(arg);
+            } catch (Throwable t0) {
+                return ctxt.handleInstantiationProblem(_fromDoubleCreator.getDeclaringClass(),
+                                                       arg, rewrapCtorProblem(ctxt, t0));
+            }
         }
-        Object arg = Double.valueOf(value);
-        try {
-            return _fromDoubleCreator.call1(arg);
-        } catch (Throwable t0) {
-            return ctxt.handleInstantiationProblem(_fromDoubleCreator.getDeclaringClass(),
-                    arg, rewrapCtorProblem(ctxt, t0));
+
+        if (_fromBigDecimalCreator != null) {
+            Object arg = BigDecimal.valueOf(value);
+            try {
+                return _fromBigDecimalCreator.call1(arg);
+            } catch (Throwable t0) {
+                return ctxt.handleInstantiationProblem(_fromBigDecimalCreator.getDeclaringClass(),
+                                                       arg, rewrapCtorProblem(ctxt, t0));
+            }
         }
+
+        return super.createFromDouble(ctxt, value);
+    }
+
+    @Override
+    public Object createFromBigDecimal(DeserializationContext ctxt, BigDecimal value) throws IOException
+    {
+        if (_fromBigDecimalCreator != null) {
+            try {
+                return _fromBigDecimalCreator.call1(value);
+            } catch (Throwable t) {
+                return ctxt.handleInstantiationProblem(_fromBigDecimalCreator.getDeclaringClass(),
+                                                       value, rewrapCtorProblem(ctxt, t)
+                );
+            }
+        }
+
+        return super.createFromBigDecimal(ctxt, value);
     }
 
     @Override
@@ -401,11 +474,11 @@ public class StdValueInstantiator
                     arg, rewrapCtorProblem(ctxt, t0));
         }
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Extended API: configuration mutators, accessors
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -428,52 +501,17 @@ public class StdValueInstantiator
         return _withArgsCreator;
     }
 
-    @Override
-    public AnnotatedParameter getIncompleteParameter() {
-        return _incompleteParameter;
-    }
-
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Internal methods
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
-     * @deprecated Since 2.7 call either {@link #unwrapAndWrapException} or
-     *  {@link #wrapAsJsonMappingException}
-     */
-    @Deprecated // since 2.7
-    protected JsonMappingException wrapException(Throwable t)
-    {
-        // 05-Nov-2015, tatu: This used to always unwrap the whole exception, but now only
-        //   does so if and until `JsonMappingException` is found.
-        for (Throwable curr = t; curr != null; curr = curr.getCause()) {
-            if (curr instanceof JsonMappingException) {
-                return (JsonMappingException) curr;
-            }
-        }
-        return new JsonMappingException(null,
-                "Instantiation of "+getValueTypeDesc()+" value failed: "+t.getMessage(), t);
-    }
-
-    /**
-     * @since 2.7
-     */
-    protected JsonMappingException unwrapAndWrapException(DeserializationContext ctxt, Throwable t)
-    {
-        // 05-Nov-2015, tatu: This used to always unwrap the whole exception, but now only
-        //   does so if and until `JsonMappingException` is found.
-        for (Throwable curr = t; curr != null; curr = curr.getCause()) {
-            if (curr instanceof JsonMappingException) {
-                return (JsonMappingException) curr;
-            }
-        }
-        return ctxt.instantiationException(getValueClass(), t);
-    }
-
-    /**
-     * @since 2.7
+     * Helper method that will return given {@link Throwable} case as
+     * a {@link JsonMappingException} (if it is of that type), or call
+     * {@link DeserializationContext#instantiationException(Class, Throwable)} to
+     * produce and return suitable {@link JsonMappingException}.
      */
     protected JsonMappingException wrapAsJsonMappingException(DeserializationContext ctxt,
             Throwable t)
@@ -486,7 +524,9 @@ public class StdValueInstantiator
     }
 
     /**
-     * @since 2.7
+     * Method that subclasses may call for standard handling of an exception thrown when
+     * calling constructor or factory method. Will unwrap {@link ExceptionInInitializerError}
+     * and {@link InvocationTargetException}s, then call {@link #wrapAsJsonMappingException}.
      */
     protected JsonMappingException rewrapCtorProblem(DeserializationContext ctxt,
             Throwable t)
@@ -505,17 +545,15 @@ public class StdValueInstantiator
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Helper methods
-    /**********************************************************
+    /**********************************************************************
      */
 
-    private Object _createUsingDelegate(
-            AnnotatedWithParams delegateCreator,
+    private Object _createUsingDelegate(AnnotatedWithParams delegateCreator,
             SettableBeanProperty[] delegateArguments,
-            DeserializationContext ctxt,
-            Object delegate)
-            throws IOException
+            DeserializationContext ctxt, Object delegate)
+                    throws IOException
     {
         if (delegateCreator == null) { // sanity-check; caller should check
             throw new IllegalStateException("No delegate constructor for "+getValueTypeDesc());

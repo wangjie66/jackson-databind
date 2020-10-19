@@ -14,14 +14,25 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 public class BooleanNode
     extends ValueNode
 {
+    private static final long serialVersionUID = 3L;
+
     // // Just need two instances...
 
     public final static BooleanNode TRUE = new BooleanNode(true);
     public final static BooleanNode FALSE = new BooleanNode(false);
 
     private final boolean _value;
-    
-    private BooleanNode(boolean v) { _value = v; }
+
+    /**
+     *<p>
+     * NOTE: visibility raised to `protected` in 2.9.3 to allow custom subtypes.
+     */
+    protected BooleanNode(boolean v) { _value = v; }
+
+    // To support JDK serialization, recovery of Singleton instance
+    protected Object readResolve() {
+        return _value ? TRUE : FALSE;
+    }
 
     public static BooleanNode getTrue() { return TRUE; }
     public static BooleanNode getFalse() { return FALSE; }

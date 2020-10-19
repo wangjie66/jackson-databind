@@ -4,15 +4,16 @@ import com.fasterxml.jackson.core.SerializableString;
 import com.fasterxml.jackson.core.io.SerializedString;
 import com.fasterxml.jackson.core.util.InternCache;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.FullyNamed;
 
 /**
  * Simple value class used for containing names of properties as defined
  * by annotations (and possibly other configuration sources).
- * 
- * @since 2.1
  */
 public class PropertyName
-    implements java.io.Serializable
+    implements FullyNamed,
+        java.io.Serializable
 {
     private static final long serialVersionUID = 1L; // 2.5
 
@@ -33,7 +34,9 @@ public class PropertyName
      * commonly this value disables behavior for which name would be needed.
      */
     public final static PropertyName NO_NAME = new PropertyName(new String(_NO_NAME), null);
-    
+
+    private final static InternCache INTERNER = InternCache.instance;
+
     /**
      * Basic name of the property.
      */
@@ -51,8 +54,6 @@ public class PropertyName
      * NOTE: not defined as volatile to avoid performance problem with
      * concurrent access in multi-core environments; due to statelessness
      * of {@link SerializedString} at most leads to multiple instantiations.
-     * 
-     * @since 2.4
      */
     protected SerializableString _encodedSimple;
     
@@ -62,30 +63,33 @@ public class PropertyName
 
     public PropertyName(String simpleName, String namespace)
     {
-        _simpleName = (simpleName == null) ? "" : simpleName;
+        _simpleName = ClassUtil.nonNullString(simpleName);
         _namespace = namespace;
     }
 
     // To support JDK serialization, recovery of Singleton instance
     protected Object readResolve() {
-        if (_simpleName == null || _USE_DEFAULT.equals(_simpleName)) {
-            return USE_DEFAULT;
-        }
-        if (_simpleName.equals(_NO_NAME) && _namespace == null) {
-            return NO_NAME;
+        if (_namespace == null) {
+            if (_simpleName == null || _USE_DEFAULT.equals(_simpleName)) {
+                return USE_DEFAULT;
+            }
+            // 30-Oct-2016, tatu: I don't see how this could ever occur...
+            //     or how to distinguish USE_DEFAULT/NO_NAME from serialized
+            /*
+            if (_simpleName.equals(_NO_NAME)) {
+                return NO_NAME;
+            }
+            */
         }
         return this;
     }
 
-    /**
-     * @since 2.6
-     */
     public static PropertyName construct(String simpleName)
     {
         if (simpleName == null || simpleName.length() == 0) {
             return USE_DEFAULT;
         }
-        return new PropertyName(InternCache.instance.intern(simpleName), null);
+        return new PropertyName(INTERNER.intern(simpleName), null);
     }
 
     public static PropertyName construct(String simpleName, String ns)
@@ -96,7 +100,7 @@ public class PropertyName
         if (ns == null && simpleName.length() == 0) {
             return USE_DEFAULT;
         }
-        return new PropertyName(InternCache.instance.intern(simpleName), ns);
+        return new PropertyName(INTERNER.intern(simpleName), ns);
     }
 
     public PropertyName internSimpleName()
@@ -143,6 +147,22 @@ public class PropertyName
     
     /*
     /**********************************************************
+    /* FullyNamed impl
+    /**********************************************************
+     */
+
+    @Override
+    public String getName() {
+        return _simpleName;
+    }
+
+    @Override
+    public PropertyName getFullName() {
+        return this;
+    }
+
+    /*
+    /**********************************************************
     /* Accessors
     /**********************************************************
      */
@@ -154,8 +174,6 @@ public class PropertyName
     /**
      * Accessor that may be used to get lazily-constructed efficient
      * representation of the simple name.
-     * 
-     * @since 2.4
      */
     public SerializableString simpleAsEncoded(MapperConfig<?> config) {
         SerializableString sstr = _encodedSimple;
@@ -182,10 +200,8 @@ public class PropertyName
      * @since 2.3
      */
     public boolean hasSimpleName(String str) {
-        if (str == null) {
-            return _simpleName == null;
-        }
-        return str.equals(_simpleName);
+        // _simpleName never null so...
+        return _simpleName.equals(str);
     }
     
     public boolean hasNamespace() {

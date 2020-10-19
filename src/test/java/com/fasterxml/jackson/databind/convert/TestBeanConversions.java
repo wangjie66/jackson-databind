@@ -3,18 +3,22 @@ package com.fasterxml.jackson.databind.convert;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.TreeNode;
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.util.StdConverter;
 
+/**
+ * Tests for various conversions, especially ones using
+ * {@link ObjectMapper#convertValue(Object, Class)}.
+ */
 public class TestBeanConversions
     extends com.fasterxml.jackson.databind.BaseMapTest
 {
-    final ObjectMapper MAPPER = new ObjectMapper();
-
     static class PointZ {
         public int x, y;
 
@@ -64,7 +68,7 @@ public class TestBeanConversions
         public Leaf(int v) { value = v; }
     }
     
-    // [Issue#288]
+    // [databind#288]
 
     @JsonSerialize(converter = ConvertingBeanConverter.class)
     static class ConvertingBean { 
@@ -90,6 +94,23 @@ public class TestBeanConversions
           return new DummyBean(cb.x, cb.y);
        }
     }
+    
+    @JsonDeserialize(using = NullBeanDeserializer.class)
+    static class NullBean {
+        public static final NullBean NULL_INSTANCE = new NullBean();
+    }
+    
+    static class NullBeanDeserializer extends JsonDeserializer<NullBean> {
+        @Override
+        public NullBean getNullValue(final DeserializationContext context) {
+            return NullBean.NULL_INSTANCE;
+        }
+        
+        @Override
+        public NullBean deserialize(final JsonParser parser, final DeserializationContext context) {
+            throw new UnsupportedOperationException();
+        }
+    }
 
     /*
     /**********************************************************
@@ -97,6 +118,8 @@ public class TestBeanConversions
     /**********************************************************
      */
     
+    private final ObjectMapper MAPPER = new ObjectMapper();
+
     public void testBeanConvert()
     {
         // should have no problems convert between compatible beans...
@@ -124,7 +147,7 @@ public class TestBeanConversions
         try {
             MAPPER.readValue("{\"boolProp\":\"foobar\"}", BooleanBean.class);
         } catch (JsonMappingException e) {
-            verifyException(e, "Can not deserialize value of type boolean from String");
+            verifyException(e, "Cannot deserialize value of type `boolean` from String");
         }
     }
 
@@ -140,23 +163,26 @@ public class TestBeanConversions
     // should work regardless of wrapping...
     public void testWrapping() throws Exception
     {
-        ObjectMapper wrappingMapper = new ObjectMapper();
-        wrappingMapper.enable(DeserializationFeature.UNWRAP_ROOT_VALUE);
-        wrappingMapper.enable(SerializationFeature.WRAP_ROOT_VALUE);
+        ObjectMapper wrappingMapper = jsonMapperBuilder()
+                .enable(DeserializationFeature.UNWRAP_ROOT_VALUE)
+                .enable(SerializationFeature.WRAP_ROOT_VALUE)
+                .build();
 
         // conversion is ok, even if it's bogus one
         _convertAndVerifyPoint(wrappingMapper);
 
         // also: ok to have mismatched settings, since as per [JACKSON-710], should
         // not actually use wrapping internally in these cases
-        wrappingMapper = new ObjectMapper();
-        wrappingMapper.enable(DeserializationFeature.UNWRAP_ROOT_VALUE);
-        wrappingMapper.disable(SerializationFeature.WRAP_ROOT_VALUE);
+        wrappingMapper = jsonMapperBuilder()
+            .enable(DeserializationFeature.UNWRAP_ROOT_VALUE)
+            .disable(SerializationFeature.WRAP_ROOT_VALUE)
+            .build();
         _convertAndVerifyPoint(wrappingMapper);
 
-        wrappingMapper = new ObjectMapper();
-        wrappingMapper.disable(DeserializationFeature.UNWRAP_ROOT_VALUE);
-        wrappingMapper.enable(SerializationFeature.WRAP_ROOT_VALUE);
+        wrappingMapper = jsonMapperBuilder()
+                .disable(DeserializationFeature.UNWRAP_ROOT_VALUE)
+                .enable(SerializationFeature.WRAP_ROOT_VALUE)
+                .build();
         _convertAndVerifyPoint(wrappingMapper);
     }
 
@@ -190,23 +216,15 @@ public class TestBeanConversions
     }
 
     /**
-     * Need to test "shortcuts" introduced by [databind#11]
+     * Need to test "shortcuts" introduced by [databind#11] -- but
+     * removed with [databind#2220]
      */
     public void testIssue11() throws Exception
     {
-        // First the expected use case, Node specification
-        ObjectNode root = MAPPER.createObjectNode();
-        JsonNode n = root;
-        ObjectNode ob2 = MAPPER.convertValue(n, ObjectNode.class);
-        assertSame(root, ob2);
-
-        JsonNode n2 = MAPPER.convertValue(n, JsonNode.class);
-        assertSame(root, n2);
-        
         // then some other no-op conversions
-        String STR = "test";
-        CharSequence seq = MAPPER.convertValue(STR, CharSequence.class);
-        assertSame(STR, seq);
+        StringBuilder SB = new StringBuilder("test");
+        CharSequence seq = MAPPER.convertValue(SB, CharSequence.class);
+        assertNotSame(SB, seq);
 
         // and then something that should NOT use short-cut
         Leaf l = new Leaf(13);
@@ -234,10 +252,12 @@ public class TestBeanConversions
             verifyException(e, "no properties discovered");
         }
         
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
+                .build();
         try {
-            assertEquals("{}", mapper.writeValueAsString(plaino));
+            assertEquals("{}", mapper.writer()
+                    .writeValueAsString(plaino));
         } catch (Exception e) {
             throw (Exception) e.getCause();
         }
@@ -252,5 +272,15 @@ public class TestBeanConversions
         String json = MAPPER.writeValueAsString(new ConvertingBean(1, 2));
         // must be  {"a":2,"b":4}
         assertEquals("{\"a\":2,\"b\":4}", json);
-     }
+    }
+    
+    // Test null conversions from [databind#1433]
+    public void testConversionIssue1433() throws Exception
+    {
+        assertNull(MAPPER.convertValue(null, Object.class));
+        assertNull(MAPPER.convertValue(null, PointZ.class));
+        
+        assertSame(NullBean.NULL_INSTANCE,
+                MAPPER.convertValue(null, NullBean.class));
+    }
 }

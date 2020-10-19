@@ -1,7 +1,6 @@
 package com.fasterxml.jackson.databind.ser.impl;
 
 import java.io.IOException;
-import java.lang.reflect.Type;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.core.JsonGenerator;
@@ -12,7 +11,6 @@ import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrappe
 import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatTypes;
 import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
 import com.fasterxml.jackson.databind.ser.ContainerSerializer;
-import com.fasterxml.jackson.databind.ser.ContextualSerializer;
 import com.fasterxml.jackson.databind.ser.std.ArraySerializerBase;
 import com.fasterxml.jackson.databind.type.TypeFactory;
 
@@ -20,10 +18,8 @@ import com.fasterxml.jackson.databind.type.TypeFactory;
  * Standard serializer used for <code>String[]</code> values.
  */
 @JacksonStdImpl
-@SuppressWarnings("serial")
 public class StringArraySerializer
     extends ArraySerializerBase<String[]>
-    implements ContextualSerializer
 {
     /* Note: not clean in general, but we are betting against
      * anyone re-defining properties of String.class here...
@@ -40,9 +36,9 @@ public class StringArraySerializer
     protected final JsonSerializer<Object> _elementSerializer;
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
      */
     
     protected StringArraySerializer() {
@@ -72,9 +68,9 @@ public class StringArraySerializer
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Post-processing
-    /**********************************************************
+    /**********************************************************************
      */
     
     @Override
@@ -82,10 +78,9 @@ public class StringArraySerializer
             BeanProperty property)
         throws JsonMappingException
     {
-        /* 29-Sep-2012, tatu: Actually, we need to do much more contextual
-         *    checking here since we finally know for sure the property,
-         *    and it may have overrides
-         */
+        // 29-Sep-2012, tatu: Actually, we need to do much more contextual
+        //    checking here since we finally know for sure the property,
+        //    and it may have overrides
         JsonSerializer<?> ser = null;
 
         // First: if we have a property, may have property-annotation overrides
@@ -93,10 +88,8 @@ public class StringArraySerializer
             final AnnotationIntrospector ai = provider.getAnnotationIntrospector();
             AnnotatedMember m = property.getMember();
             if (m != null) {
-                Object serDef = ai.findContentSerializer(m);
-                if (serDef != null) {
-                    ser = provider.serializerInstance(m, serDef);
-                }
+                ser = provider.serializerInstance(m,
+                        ai.findContentSerializer(provider.getConfig(), m));
             }
         }
         // but since formats have both property overrides and global per-type defaults,
@@ -107,11 +100,9 @@ public class StringArraySerializer
             ser = _elementSerializer;
         }
         // May have a content converter
-        ser = findConvertingContentSerializer(provider, property, ser);
+        ser = findContextualConvertingSerializer(provider, property, ser);
         if (ser == null) {
-            ser = provider.findValueSerializer(String.class, property);
-        } else {
-            ser = provider.handleSecondaryContextualization(ser, property);
+            ser = provider.findContentValueSerializer(String.class, property);
         }
         // Optimization: default serializer just writes String, so we can avoid a call:
         if (isDefaultSerializer(ser)) {
@@ -125,9 +116,9 @@ public class StringArraySerializer
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Simple accessors
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -142,18 +133,18 @@ public class StringArraySerializer
     
     @Override
     public boolean isEmpty(SerializerProvider prov, String[] value) {
-        return (value == null) || (value.length == 0);
+        return (value.length == 0);
     }
 
     @Override
     public boolean hasSingleElement(String[] value) {
         return (value.length == 1);
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Actual serialization
-    /**********************************************************
+    /**********************************************************************
      */
     
     @Override
@@ -169,7 +160,7 @@ public class StringArraySerializer
                 return;
             }
         }
-        gen.writeStartArray(len);
+        gen.writeStartArray(value, len);
         serializeContents(value, gen, provider);
         gen.writeEndArray();
     }
@@ -202,18 +193,13 @@ public class StringArraySerializer
         for (int i = 0, len = value.length; i < len; ++i) {
             String str = value[i];
             if (str == null) {
-                provider.defaultSerializeNull(gen);
+                provider.defaultSerializeNullValue(gen);
             } else {
                 ser.serialize(value[i], gen, provider);
             }
         }
     }
 
-    @Override
-    public JsonNode getSchema(SerializerProvider provider, Type typeHint) {
-        return createSchemaNode("array", true).set("items", createSchemaNode("string"));
-    }
-    
     @Override
     public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws JsonMappingException
     {

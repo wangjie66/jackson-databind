@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.*;
 
 import com.fasterxml.jackson.databind.BaseMapTest;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.testutil.NoCheckSubTypeValidator;
 
 @SuppressWarnings("serial")
 public class TestEnumTyping extends BaseMapTest
@@ -35,7 +36,7 @@ public class TestEnumTyping extends BaseMapTest
     
     static class UntypedEnumBean
     {
-       @JsonTypeInfo(use=JsonTypeInfo.Id.CLASS, include=JsonTypeInfo.As.PROPERTY, property="__type")
+        @JsonTypeInfo(use=JsonTypeInfo.Id.CLASS, include=JsonTypeInfo.As.PROPERTY, property="__type")
         public Object value;
 
         public UntypedEnumBean() { }
@@ -46,22 +47,39 @@ public class TestEnumTyping extends BaseMapTest
             value = o;
         }
     }
-    
+
+    // for [databind#2605]
+    static class EnumContaintingClass<ENUM_TYPE extends Enum<ENUM_TYPE>> {
+        @JsonTypeInfo(
+            use = JsonTypeInfo.Id.CLASS,
+            include = JsonTypeInfo.As.PROPERTY,
+            property = "@class"
+        )
+        public ENUM_TYPE selected;
+
+        protected EnumContaintingClass() { }
+
+        public EnumContaintingClass(ENUM_TYPE selected) {
+          this.selected = selected;
+        }
+    }
+
     /*
     /**********************************************************
     /* Unit tests
     /**********************************************************
      */
 
+    private final ObjectMapper MAPPER = newJsonMapper();
+
     public void testTagList() throws Exception
     {
-        ObjectMapper m = new ObjectMapper();
         TagList list = new TagList();
         list.add(Tag.A);
         list.add(Tag.B);
-        String json = m.writeValueAsString(list);
+        String json = MAPPER.writeValueAsString(list);
 
-        TagList result = m.readValue(json, TagList.class);
+        TagList result = MAPPER.readValue(json, TagList.class);
         assertEquals(2, result.size());
         assertSame(Tag.A, result.get(0));
         assertSame(Tag.B, result.get(1));
@@ -69,21 +87,19 @@ public class TestEnumTyping extends BaseMapTest
 
     public void testEnumInterface() throws Exception
     {
-        ObjectMapper m = new ObjectMapper();
-        String json = m.writeValueAsString(Tag.B);
-        EnumInterface result = m.readValue(json, EnumInterface.class);
+        String json = MAPPER.writeValueAsString(Tag.B);
+        EnumInterface result = MAPPER.readValue(json, EnumInterface.class);
         assertSame(Tag.B, result);
     }
 
     public void testEnumInterfaceList() throws Exception
     {
-        ObjectMapper m = new ObjectMapper();
         EnumInterfaceList list = new EnumInterfaceList();
         list.add(Tag.A);
         list.add(Tag.B);
-        String json = m.writeValueAsString(list);
+        String json = MAPPER.writeValueAsString(list);
         
-        EnumInterfaceList result = m.readValue(json, EnumInterfaceList.class);
+        EnumInterfaceList result = MAPPER.readValue(json, EnumInterfaceList.class);
         assertEquals(2, result.size());
         assertSame(Tag.A, result.get(0));
         assertSame(Tag.B, result.get(1));
@@ -91,7 +107,9 @@ public class TestEnumTyping extends BaseMapTest
 
     public void testUntypedEnum() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
+        final ObjectMapper mapper = jsonMapperBuilder()
+                .polymorphicTypeValidator(new NoCheckSubTypeValidator())
+                .build();
         String str = mapper.writeValueAsString(new UntypedEnumBean(TestEnum.B));
         UntypedEnumBean result = mapper.readValue(str, UntypedEnumBean.class);
         assertNotNull(result);
@@ -100,5 +118,14 @@ public class TestEnumTyping extends BaseMapTest
         assertSame(TestEnum.class, ob.getClass());
         assertEquals(TestEnum.B, result.value);
     }
-    
+
+    // for [databind#2605]
+    public void testRoundtrip() throws Exception
+    {
+        EnumContaintingClass<TestEnum> input = new EnumContaintingClass<TestEnum>(TestEnum.B);
+        String json = MAPPER.writeValueAsString(input);
+//      Object o = MAPPER.readerFor(EnumContaintingClass.class).readValue(json);
+        Object o = MAPPER.readValue(json, EnumContaintingClass.class);
+        assertNotNull(o);
+    }
 }

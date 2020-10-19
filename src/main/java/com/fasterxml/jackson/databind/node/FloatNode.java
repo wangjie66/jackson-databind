@@ -5,16 +5,17 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 
 import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.io.NumberOutput;
 import com.fasterxml.jackson.databind.SerializerProvider;
 
 /**
- * <code>JsonNode</code> implementation for efficiently containing 32-bit
+ * {@code JsonNode} implementation for efficiently containing 32-bit
  * `float` values.
- * 
- * @since 2.2
  */
 public class FloatNode extends NumericNode
 {
+    private static final long serialVersionUID = 3L;
+
     protected final float _value;
 
     /* 
@@ -74,7 +75,7 @@ public class FloatNode extends NumericNode
 
     @Override
     public float floatValue() { return _value; }
-    
+
     @Override
     public double doubleValue() { return _value; }
 
@@ -88,16 +89,17 @@ public class FloatNode extends NumericNode
 
     @Override
     public String asText() {
-        // As per [jackson-databind#707]
-//        return NumberOutput.toString(_value);
-        // TODO: in 2.7, call `NumberOutput.toString (added in 2.6); not yet for backwards compat
-        return Float.toString(_value);
+        return String.valueOf(_value);
     }
 
     @Override
-    public final void serialize(JsonGenerator jg, SerializerProvider provider) throws IOException
-    {
-        jg.writeNumber(_value);
+    public boolean isNaN() {
+        return NumberOutput.notFinite(_value);
+    }
+
+    @Override
+    public final void serialize(JsonGenerator g, SerializerProvider provider) throws IOException {
+        g.writeNumber(_value);
     }
 
     @Override
@@ -107,7 +109,7 @@ public class FloatNode extends NumericNode
         if (o == null) return false;
         if (o instanceof FloatNode) {
             // We must account for NaNs: NaN does not equal NaN, therefore we have
-            // to use Double.compare().
+            // to use Float.compare().
             final float otherValue = ((FloatNode) o)._value;
             return Float.compare(_value, otherValue) == 0;
         }

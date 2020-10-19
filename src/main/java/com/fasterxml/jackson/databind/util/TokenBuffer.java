@@ -3,13 +3,16 @@ package com.fasterxml.jackson.databind.util;
 import java.io.*;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.TreeMap;
 
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.core.base.ParserMinimalBase;
-import com.fasterxml.jackson.core.json.JsonReadContext;
-import com.fasterxml.jackson.core.json.JsonWriteContext;
+import com.fasterxml.jackson.core.io.NumberOutput;
+import com.fasterxml.jackson.core.sym.FieldNameMatcher;
 import com.fasterxml.jackson.core.util.ByteArrayBuilder;
+import com.fasterxml.jackson.core.util.JacksonFeatureSet;
+import com.fasterxml.jackson.core.util.SimpleTokenWriteContext;
 import com.fasterxml.jackson.databind.*;
 
 /**
@@ -19,70 +22,58 @@ import com.fasterxml.jackson.databind.*;
  * ones; but not significantly less efficient for larger), highly efficient
  * for linear iteration and appending. Implemented as segmented/chunked
  * linked list of tokens; only modifications are via appends.
- *<p>
- * Note that before version 2.0, this class was located in the "core"
- * bundle, not data-binding; but since it was only used by data binding,
- * was moved here to reduce size of core package
  */
 public class TokenBuffer
-/* Won't use JsonGeneratorBase, to minimize overhead for validity
- * checking
- */
+// Won't use JsonGeneratorBase, to minimize overhead for validity checking
     extends JsonGenerator
 {
-    protected final static int DEFAULT_GENERATOR_FEATURES = JsonGenerator.Feature.collectDefaults();
+    protected final static int DEFAULT_STREAM_WRITE_FEATURES = StreamWriteFeature.collectDefaults();
+
+    // Should work for now
+    protected final static JacksonFeatureSet<StreamWriteCapability> BOGUS_WRITE_CAPABILITIES
+        = JacksonFeatureSet.fromDefaults(StreamWriteCapability.values());
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Configuration
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
-     * Object codec to use for stream-based object
-     * conversion through parser/generator interfaces. If null,
-     * such methods can not be used.
+     * Parse context from "parent" parser (one from which content to buffer is read,
+     * if specified). Used, if available, when reading content, to present full
+     * context as if content was read from the original parser: this is useful
+     * in error reporting and sometimes processing as well.
      */
-    protected ObjectCodec _objectCodec;
+    protected TokenStreamContext _parentContext;
 
     /**
      * Bit flag composed of bits that indicate which
-     * {@link com.fasterxml.jackson.core.JsonGenerator.Feature}s
+     * {@link StreamWriteFeature}s
      * are enabled.
      *<p>
      * NOTE: most features have no effect on this class
      */
-    protected int _generatorFeatures;
+    protected int _streamWriteFeatures;
 
     protected boolean _closed;
 
-    /**
-     * @since 2.3
-     */
     protected boolean _hasNativeTypeIds;
 
-    /**
-     * @since 2.3
-     */
     protected boolean _hasNativeObjectIds;
 
-    /**
-     * @since 2.3
-     */
     protected boolean _mayHaveNativeIds;
 
     /**
      * Flag set during construction, if use of {@link BigDecimal} is to be forced
      * on all floating-point values.
-     *
-     * @since 2.7
      */
     protected boolean _forceBigDecimal;
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Token buffering state
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -119,43 +110,34 @@ public class TokenBuffer
     protected boolean _hasNativeId = false;
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Output state
-    /**********************************************************
+    /**********************************************************************
      */
 
-    protected JsonWriteContext _writeContext;
+    protected SimpleTokenWriteContext _tokenWriteContext;
+    
+    // 05-Oct-2017, tatu: need to consider if this needs to  be properly linked...
+    //   especially for "convertValue()" use case
+    /**
+     * @since 3.0
+     */
+    protected ObjectWriteContext _objectWriteContext; // = ObjectWriteContext.empty();
 
     /*
-    /**********************************************************
-    /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
+    /* Life-cycle: constructors
+    /**********************************************************************
      */
 
     /**
-     * @param codec Object codec to use for stream-based object
-     *   conversion through parser/generator interfaces. If null,
-     *   such methods can not be used.
-     *   
-     * @deprecated since 2.3 preferred variant is one that takes {@link JsonParser} or additional boolean parameter.
-     */
-    @Deprecated
-    public TokenBuffer(ObjectCodec codec) {
-        this(codec, false);
-    }
-
-    /**
-     * @param codec Object codec to use for stream-based object
-     *   conversion through parser/generator interfaces. If null,
-     *   such methods can not be used.
      * @param hasNativeIds Whether resulting {@link JsonParser} (if created)
      *   is considered to support native type and object ids
      */
-    public TokenBuffer(ObjectCodec codec, boolean hasNativeIds)
+    public TokenBuffer(boolean hasNativeIds)
     {
-        _objectCodec = codec;
-        _generatorFeatures = DEFAULT_GENERATOR_FEATURES;
-        _writeContext = JsonWriteContext.createRootContext(null);
+        _streamWriteFeatures = DEFAULT_STREAM_WRITE_FEATURES;
+        _tokenWriteContext = SimpleTokenWriteContext.createRootContext(null);
         // at first we have just one segment
         _first = _last = new Segment();
         _appendAt = 0;
@@ -166,20 +148,27 @@ public class TokenBuffer
     }
 
     /**
-     * @since 2.3
+     * @since 3.0
      */
-    public TokenBuffer(JsonParser p) {
-        this(p, null);
+    protected TokenBuffer(ObjectWriteContext writeContext, boolean hasNativeIds)
+    {
+        _objectWriteContext = writeContext;
+        _streamWriteFeatures = DEFAULT_STREAM_WRITE_FEATURES;
+        _tokenWriteContext = SimpleTokenWriteContext.createRootContext(null);
+        // at first we have just one segment
+        _first = _last = new Segment();
+        _appendAt = 0;
+        _hasNativeTypeIds = hasNativeIds;
+        _hasNativeObjectIds = hasNativeIds;
+
+        _mayHaveNativeIds = _hasNativeTypeIds | _hasNativeObjectIds;
     }
 
-    /**
-     * @since 2.7
-     */
     public TokenBuffer(JsonParser p, DeserializationContext ctxt)
     {
-        _objectCodec = p.getCodec();
-        _generatorFeatures = DEFAULT_GENERATOR_FEATURES;
-        _writeContext = JsonWriteContext.createRootContext(null);
+        _parentContext = p.getParsingContext();
+        _streamWriteFeatures = DEFAULT_STREAM_WRITE_FEATURES;
+        _tokenWriteContext = SimpleTokenWriteContext.createRootContext(null);
         // at first we have just one segment
         _first = _last = new Segment();
         _appendAt = 0;
@@ -190,32 +179,101 @@ public class TokenBuffer
                 : ctxt.isEnabled(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
     }
 
-    /**
-     * @since 2.7
+    /*
+    /**********************************************************************
+    /* Life-cycle: helper factory methods
+    /**********************************************************************
      */
+
+    /**
+     * Specialized factory method used when we are converting values and do not
+     * have or use "real" parsers or generators.
+     *
+     * @since 3.0
+     */
+    public static TokenBuffer forValueConversion(SerializerProvider prov)
+    {
+        // false -> no native Object Ids available (or rather not needed)
+        return new TokenBuffer(prov, false);
+    }
+
+    /**
+     * Specialized factory method used when we are buffering input being read from
+     * specified token stream and within specified {@link DeserializationContext}.
+     *
+     * @since 3.0
+     */
+    public static TokenBuffer forInputBuffering(JsonParser p, DeserializationContext ctxt)
+    {
+        return new TokenBuffer(p, ctxt);
+    }
+
+    /**
+     * Specialized factory method used when we are generating token stream for further processing
+     * without tokens coming from specific input token stream.
+     *
+     * @since 3.0
+     */
+    public static TokenBuffer forGeneration()
+    {
+        return new TokenBuffer(false);
+    }
+
+    /*
+    /**********************************************************************
+    /* Life-cycle: initialization
+    /**********************************************************************
+     */
+    
+    /**
+     * Convenience method, equivalent to:
+     *<pre>
+     * TokenBuffer b = new TokenBuffer(p);
+     * b.copyCurrentStructure(p);
+     * return b;
+     *</pre>
+     */
+    public static TokenBuffer asCopyOfValue(JsonParser p) throws IOException {
+        TokenBuffer b = new TokenBuffer(p, null);
+        b.copyCurrentStructure(p);
+        return b;
+    }
+
+    /**
+     * Method that allows explicitly specifying parent parse context to associate
+     * with contents of this buffer. Usually context is assigned at construction,
+     * based on given parser; but it is not always available, and may not contain
+     * intended context.
+     */
+    public TokenBuffer overrideParentContext(TokenStreamContext ctxt) {
+        _parentContext = ctxt;
+        return this;
+    }
+
     public TokenBuffer forceUseOfBigDecimal(boolean b) {
         _forceBigDecimal = b;
         return this;
     }
 
-    @Override
-    public Version version() {
-        return com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION;
-    }
+    /*
+    /**********************************************************************
+    /* Parser construction
+    /**********************************************************************
+     */
 
     /**
      * Method used to create a {@link JsonParser} that can read contents
-     * stored in this buffer. Will use default <code>_objectCodec</code> for
-     * object conversions.
+     * stored in this buffer. Will create an "empty" read context
+     * (see {@link ObjectReadContext#empty()} which often is not what you want.
      *<p>
      * Note: instances are not synchronized, that is, they are not thread-safe
      * if there are concurrent appends to the underlying buffer.
      * 
      * @return Parser that can be used for reading contents stored in this buffer
      */
-    public JsonParser asParser()
-    {
-        return asParser(_objectCodec);
+    public JsonParser asParser() {
+        return new Parser(ObjectReadContext.empty(), this,
+                _first, _hasNativeTypeIds, _hasNativeObjectIds, _parentContext);
     }
 
     /**
@@ -225,45 +283,67 @@ public class TokenBuffer
      * Note: instances are not synchronized, that is, they are not thread-safe
      * if there are concurrent appends to the underlying buffer.
      *
-     * @param codec Object codec to use for stream-based object
-     *   conversion through parser/generator interfaces. If null,
-     *   such methods can not be used.
+     * @param readCtxt Active read context to use.
      * 
      * @return Parser that can be used for reading contents stored in this buffer
      */
-    public JsonParser asParser(ObjectCodec codec)
+    public JsonParser asParser(ObjectReadContext readCtxt)
     {
-        return new Parser(_first, codec, _hasNativeTypeIds, _hasNativeObjectIds);
+        return new Parser(readCtxt, this,
+                _first, _hasNativeTypeIds, _hasNativeObjectIds, _parentContext);
+    }
+
+    /**
+     * Same as:
+     *<pre>
+     *  JsonParser p = asParser();
+     *  p.nextToken();
+     *  return p;
+     *</pre>
+     */
+    public JsonParser asParserOnFirstToken() throws IOException {
+        JsonParser p = asParser();
+        p.nextToken();
+        return p;
     }
 
     /**
      * @param src Parser to use for accessing source information
      *    like location, configured codec
      */
-    public JsonParser asParser(JsonParser src)
+    public JsonParser asParser(ObjectReadContext readCtxt, JsonParser src)
     {
-        Parser p = new Parser(_first, src.getCodec(), _hasNativeTypeIds, _hasNativeObjectIds);
+        Parser p = new Parser(readCtxt, this,
+                _first, _hasNativeTypeIds, _hasNativeObjectIds, _parentContext);
         p.setLocation(src.getTokenLocation());
         return p;
     }
-    
     /*
-    /**********************************************************
+    /**********************************************************************
+    /* Versioned (mostly since buffer is `JsonGenerator`
+    /**********************************************************************
+     */
+
+    @Override
+    public Version version() {
+        return com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION;
+    }
+
+    /*
+    /**********************************************************************
     /* Additional accessors
-    /**********************************************************
+    /**********************************************************************
      */
 
     public JsonToken firstToken() {
-        if (_first != null) {
-            return _first.type(0);
-        }
-        return null;
+        // no need to null check; never create without `_first`
+        return _first.type(0);
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Other custom methods not needed for implementing interfaces
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -291,16 +371,16 @@ public class TokenBuffer
         }
         return this;
     }
-    
+
     /**
      * Helper method that will write all contents of this buffer
      * using given {@link JsonGenerator}.
      *<p>
      * Note: this method would be enough to implement
      * <code>JsonSerializer</code>  for <code>TokenBuffer</code> type;
-     * but we can not have upwards
+     * but we cannot have upwards
      * references (from core to mapper package); and as such we also
-     * can not take second argument.
+     * cannot take second argument.
      */
     public void serialize(JsonGenerator gen) throws IOException
     {
@@ -397,7 +477,7 @@ public class TokenBuffer
                         gen.writeNumber((String) n);
                     } else {
                         throw new JsonGenerationException(String.format(
-                                "Unrecognized value type for VALUE_NUMBER_FLOAT: %s, can not serialize",
+                                "Unrecognized value type for VALUE_NUMBER_FLOAT: %s, cannot serialize",
                                 n.getClass().getName()), gen);
                     }
                 }
@@ -434,26 +514,23 @@ public class TokenBuffer
 
     /**
      * Helper method used by standard deserializer.
-     * 
-     * @since 2.3
      */
     public TokenBuffer deserialize(JsonParser p, DeserializationContext ctxt) throws IOException
     {
-        if (p.getCurrentTokenId() != JsonToken.FIELD_NAME.id()) {
+        if (!p.hasToken(JsonToken.FIELD_NAME)) {
             copyCurrentStructure(p);
             return this;
         }
-        /* 28-Oct-2014, tatu: As per [databind#592], need to support a special case of starting from
-         *    FIELD_NAME, which is taken to mean that we are missing START_OBJECT, but need
-         *    to assume one did exist.
-         */
+        // 28-Oct-2014, tatu: As per [databind#592], need to support a special case of starting from
+        //    FIELD_NAME, which is taken to mean that we are missing START_OBJECT, but need
+        //    to assume one did exist.
         JsonToken t;
         writeStartObject();
         do {
             copyCurrentStructure(p);
         } while ((t = p.nextToken()) == JsonToken.FIELD_NAME);
         if (t != JsonToken.END_OBJECT) {
-            ctxt.reportWrongTokenException(p, JsonToken.END_OBJECT,
+            ctxt.reportWrongTokenException(TokenBuffer.class, JsonToken.END_OBJECT,
                     "Expected END_OBJECT after copying contents of a JsonParser into TokenBuffer, got "+t);
             // never gets here
         }
@@ -497,7 +574,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
                     sb.append(t.toString());
                     if (t == JsonToken.FIELD_NAME) {
                         sb.append('(');
-                        sb.append(jp.getCurrentName());
+                        sb.append(jp.currentName());
                         sb.append(')');
                     }
                 }
@@ -525,73 +602,61 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             sb.append("[typeId=").append(String.valueOf(typeId)).append(']');
         }
     }
-    
+
     /*
-    /**********************************************************
-    /* JsonGenerator implementation: configuration
-    /**********************************************************
+    /**********************************************************************
+    /* JsonGenerator implementation: context
+    /**********************************************************************
      */
 
     @Override
-    public JsonGenerator enable(Feature f) {
-        _generatorFeatures |= f.getMask();
-        return this;
+    public TokenStreamContext getOutputContext() { return _tokenWriteContext; }
+
+    @Override
+    public Object getCurrentValue() {
+        return _tokenWriteContext.getCurrentValue();
     }
 
     @Override
-    public JsonGenerator disable(Feature f) {
-        _generatorFeatures &= ~f.getMask();
+    public void setCurrentValue(Object v) {
+        _tokenWriteContext.setCurrentValue(v);
+    }
+
+    @Override
+    public ObjectWriteContext getObjectWriteContext() { return _objectWriteContext; }
+
+    /*
+    /**********************************************************************
+    /* JsonGenerator implementation: configuration
+    /**********************************************************************
+     */
+
+    @Override
+    public JsonGenerator configure(StreamWriteFeature f, boolean state) {
+        if (state) {
+            _streamWriteFeatures |= f.getMask();
+        } else {
+            _streamWriteFeatures &= ~f.getMask();
+        }
         return this;
     }
 
     //public JsonGenerator configure(SerializationFeature f, boolean state) { }
 
     @Override
-    public boolean isEnabled(Feature f) {
-        return (_generatorFeatures & f.getMask()) != 0;
+    public boolean isEnabled(StreamWriteFeature f) {
+        return (_streamWriteFeatures & f.getMask()) != 0;
     }
 
     @Override
-    public int getFeatureMask() {
-        return _generatorFeatures;
+    public int streamWriteFeatures() {
+        return _streamWriteFeatures;
     }
-
-    @Override
-    @Deprecated
-    public JsonGenerator setFeatureMask(int mask) {
-        _generatorFeatures = mask;
-        return this;
-    }
-
-    @Override
-    public JsonGenerator overrideStdFeatures(int values, int mask) {
-        int oldState = getFeatureMask();
-        _generatorFeatures = (oldState & ~mask) | (values & mask);
-        return this;
-    }
-
-    @Override
-    public JsonGenerator useDefaultPrettyPrinter() {
-        // No-op: we don't indent
-        return this;
-    }
-
-    @Override
-    public JsonGenerator setCodec(ObjectCodec oc) {
-        _objectCodec = oc;
-        return this;
-    }
-
-    @Override
-    public ObjectCodec getCodec() { return _objectCodec; }
-
-    @Override
-    public final JsonWriteContext getOutputContext() { return _writeContext; }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation: capability introspection
-    /**********************************************************
+    /**********************************************************************
      */
     
     /**
@@ -601,11 +666,20 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
     public boolean canWriteBinaryNatively() {
         return true;
     }
-    
+
+    // 20-May-2020, tatu: This may or may not be enough -- ideally access is
+    //    via `DeserializationContext`, not parser, but if latter is needed
+    //    then we'll need to pass this from parser contents if which were
+    //    buffered.
+    @Override
+    public JacksonFeatureSet<StreamWriteCapability> getWriteCapabilities() {
+        return BOGUS_WRITE_CAPABILITIES;
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation: low-level output handling
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -619,80 +693,98 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
     @Override
     public boolean isClosed() { return _closed; }
 
+    @Override
+    public Object getOutputTarget() { return null; }
+
+    @Override
+    public int getOutputBuffered() { return -1; }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation: write methods, structural
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
     public final void writeStartArray() throws IOException
     {
-        _writeContext.writeValue();
-        _append(JsonToken.START_ARRAY);
-        _writeContext = _writeContext.createChildArrayContext();
+        _appendStartMarker(JsonToken.START_ARRAY);
+        _tokenWriteContext = _tokenWriteContext.createChildArrayContext(null);
+    }
+
+    @Override
+    public final void writeStartArray(Object forValue) throws IOException
+    {
+        _appendStartMarker(JsonToken.START_ARRAY);
+        _tokenWriteContext = _tokenWriteContext.createChildArrayContext(forValue);
+    }
+
+    @Override
+    public final void writeStartArray(Object forValue, int len) throws IOException
+    {
+        _appendStartMarker(JsonToken.START_ARRAY);
+        _tokenWriteContext = _tokenWriteContext.createChildArrayContext(forValue);
     }
 
     @Override
     public final void writeEndArray() throws IOException
     {
-        _append(JsonToken.END_ARRAY);
-        // Let's allow unbalanced tho... i.e. not run out of root level, ever
-        JsonWriteContext c = _writeContext.getParent();
-        if (c != null) {
-            _writeContext = c;
-        }
+        _appendEndMarker(JsonToken.END_ARRAY);
     }
 
     @Override
     public final void writeStartObject() throws IOException
     {
-        _writeContext.writeValue();
-        _append(JsonToken.START_OBJECT);
-        _writeContext = _writeContext.createChildObjectContext();
+        _appendStartMarker(JsonToken.START_OBJECT);
+        _tokenWriteContext = _tokenWriteContext.createChildObjectContext(null);
     }
 
-    @Override // since 2.8
+    @Override
     public void writeStartObject(Object forValue) throws IOException
     {
-        _writeContext.writeValue();
-        _append(JsonToken.START_OBJECT);
-        JsonWriteContext ctxt = _writeContext.createChildObjectContext();
-        _writeContext = ctxt;
-        if (forValue != null) {
-            ctxt.setCurrentValue(forValue);
-        }
+        _appendStartMarker(JsonToken.START_OBJECT);
+        _tokenWriteContext = _tokenWriteContext.createChildObjectContext(forValue);
+    }
+
+    @Override
+    public void writeStartObject(Object forValue, int size) throws IOException
+    {
+        _appendStartMarker(JsonToken.START_OBJECT);
+        _tokenWriteContext = _tokenWriteContext.createChildObjectContext(forValue);
     }
 
     @Override
     public final void writeEndObject() throws IOException
     {
-        _append(JsonToken.END_OBJECT);
-        // Let's allow unbalanced tho... i.e. not run out of root level, ever
-        JsonWriteContext c = _writeContext.getParent();
-        if (c != null) {
-            _writeContext = c;
-        }
+        _appendEndMarker(JsonToken.END_OBJECT);
     }
 
     @Override
     public final void writeFieldName(String name) throws IOException
     {
-        _writeContext.writeFieldName(name);
-        _append(JsonToken.FIELD_NAME, name);
+        _tokenWriteContext.writeFieldName(name);
+        _appendFieldName(name);
     }
 
     @Override
-    public void writeFieldName(SerializableString name) throws IOException
-    {
-        _writeContext.writeFieldName(name.getValue());
-        _append(JsonToken.FIELD_NAME, name);
+    public void writeFieldName(SerializableString name) throws IOException {
+        _tokenWriteContext.writeFieldName(name.getValue());
+        _appendFieldName(name);
     }
-    
+
+    @Override
+    public void writeFieldId(long id) throws IOException {
+        // 15-Aug-2019, tatu: could and probably should be improved to support
+        //    buffering but...
+        final String name = Long.toString(id);
+        _tokenWriteContext.writeFieldName(name);
+        _appendFieldName(name);
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation: write methods, textual
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -776,9 +868,9 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation: write methods, primitive types
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -843,9 +935,9 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
     }
 
     /*
-    /***********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation: write methods for POJOs/trees
-    /***********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -856,19 +948,12 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             return;
         }
         Class<?> raw = value.getClass();
-        if (raw == byte[].class || (value instanceof RawValue)) {
+        if (raw == byte[].class || (value instanceof RawValue)
+                || (_objectWriteContext == null)) {
             _appendValue(JsonToken.VALUE_EMBEDDED_OBJECT, value);
             return;
         }
-        if (_objectCodec == null) {
-            /* 28-May-2014, tatu: Tricky choice here; if no codec, should we
-             *   err out, or just embed? For now, do latter.
-             */
-//          throw new JsonMappingException("No ObjectCodec configured for TokenBuffer, writeObject() called");
-            _appendValue(JsonToken.VALUE_EMBEDDED_OBJECT, value);
-        } else {
-            _objectCodec.writeValue(this, value);
-        }
+        _objectWriteContext.writeValue(this, value);
     }
 
     @Override
@@ -878,19 +963,17 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             writeNull();
             return;
         }
-
-        if (_objectCodec == null) {
-            // as with 'writeObject()', is codec optional?
+        if (_objectWriteContext == null) {
             _appendValue(JsonToken.VALUE_EMBEDDED_OBJECT, node);
-        } else {
-            _objectCodec.writeTree(this, node);
+            return;
         }
+        _objectWriteContext.writeTree(this, node);
     }
 
     /*
-    /***********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation; binary
-    /***********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -902,14 +985,13 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
          *   seems pointless, so let's not worry about it unless there's some
          *   compelling reason to.
          */
-        byte[] copy = new byte[len];
-        System.arraycopy(data, offset, copy, 0, len);
+        byte[] copy = Arrays.copyOfRange(data, offset, offset + len);
         writeObject(copy);
     }
 
     /**
      * Although we could support this method, it does not necessarily make
-     * sense: we can not make good use of streaming because buffer must
+     * sense: we cannot make good use of streaming because buffer must
      * hold all the data. Because of this, currently this will simply
      * throw {@link UnsupportedOperationException}
      */
@@ -919,9 +1001,9 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
     }
 
     /*
-    /***********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation: native ids
-    /***********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -946,15 +1028,15 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         _hasNativeId = true;
     }
 
-    @Override // since 2.8
+    @Override
     public void writeEmbeddedObject(Object object) throws IOException {
         _appendValue(JsonToken.VALUE_EMBEDDED_OBJECT, object);
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* JsonGenerator implementation; pass-through copy
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -963,7 +1045,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         if (_mayHaveNativeIds) {
             _checkNativeIds(p);
         }
-        switch (p.getCurrentToken()) {
+        switch (p.currentToken()) {
         case START_OBJECT:
             writeStartObject();
             break;
@@ -977,7 +1059,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             writeEndArray();
             break;
         case FIELD_NAME:
-            writeFieldName(p.getCurrentName());
+            writeFieldName(p.currentName());
             break;
         case VALUE_STRING:
             if (p.hasTextCharacters()) {
@@ -1000,11 +1082,10 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             break;
         case VALUE_NUMBER_FLOAT:
             if (_forceBigDecimal) {
-                /* 10-Oct-2015, tatu: Ideally we would first determine whether underlying
-                 *   number is already decoded into a number (in which case might as well
-                 *   access as number); or is still retained as text (in which case we
-                 *   should further defer decoding that may not need BigDecimal):
-                 */
+                // 10-Oct-2015, tatu: Ideally we would first determine whether underlying
+                //   number is already decoded into a number (in which case might as well
+                //   access as number); or is still retained as text (in which case we
+                //   should further defer decoding that may not need BigDecimal):
                 writeNumber(p.getDecimalValue());
             } else {
                 switch (p.getNumberType()) {
@@ -1032,104 +1113,187 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             writeObject(p.getEmbeddedObject());
             break;
         default:
-            throw new RuntimeException("Internal error: should never end up through this code path");
+            throw new RuntimeException("Internal error: unexpected token: "+p.currentToken());
         }
     }
-    
+
     @Override
     public void copyCurrentStructure(JsonParser p) throws IOException
     {
-        JsonToken t = p.getCurrentToken();
+        JsonToken t = p.currentToken();
 
         // Let's handle field-name separately first
         if (t == JsonToken.FIELD_NAME) {
             if (_mayHaveNativeIds) {
                 _checkNativeIds(p);
             }
-            writeFieldName(p.getCurrentName());
+            writeFieldName(p.currentName());
             t = p.nextToken();
             // fall-through to copy the associated value
+        } else if (t == null) {
+            throw new IllegalStateException("No token available from argument `JsonParser`");
         }
 
-        if (_mayHaveNativeIds) {
-            _checkNativeIds(p);
-        }
-        
+        // We'll do minor handling here to separate structured, scalar values,
+        // then delegate appropriately.
+        // Plus also deal with oddity of "dangling" END_OBJECT/END_ARRAY
         switch (t) {
         case START_ARRAY:
-            writeStartArray();
-            while (p.nextToken() != JsonToken.END_ARRAY) {
-                copyCurrentStructure(p);
+            if (_mayHaveNativeIds) {
+                _checkNativeIds(p);
             }
-            writeEndArray();
+            writeStartArray();
+            _copyBufferContents(p);
             break;
         case START_OBJECT:
-            writeStartObject();
-            while (p.nextToken() != JsonToken.END_OBJECT) {
-                copyCurrentStructure(p);
+            if (_mayHaveNativeIds) {
+                _checkNativeIds(p);
             }
+            writeStartObject();
+            _copyBufferContents(p);
+            break;
+        case END_ARRAY:
+            writeEndArray();
+            break;
+        case END_OBJECT:
             writeEndObject();
             break;
         default: // others are simple:
-            copyCurrentEvent(p);
+            _copyBufferValue(p, t);
         }
     }
 
-    
-    private final void _checkNativeIds(JsonParser jp) throws IOException
+    protected void _copyBufferContents(JsonParser p) throws IOException
     {
-        if ((_typeId = jp.getTypeId()) != null) {
-            _hasNativeId = true;
+        int depth = 1;
+        JsonToken t;
+
+        while ((t = p.nextToken()) != null) {
+            switch (t) {
+            case FIELD_NAME:
+                if (_mayHaveNativeIds) {
+                    _checkNativeIds(p);
+                }
+                writeFieldName(p.currentName());
+                break;
+
+            case START_ARRAY:
+                if (_mayHaveNativeIds) {
+                    _checkNativeIds(p);
+                }
+                writeStartArray();
+                ++depth;
+                break;
+
+            case START_OBJECT:
+                if (_mayHaveNativeIds) {
+                    _checkNativeIds(p);
+                }
+                writeStartObject();
+                ++depth;
+                break;
+
+            case END_ARRAY:
+                writeEndArray();
+                if (--depth == 0) {
+                    return;
+                }
+                break;
+            case END_OBJECT:
+                writeEndObject();
+                if (--depth == 0) {
+                    return;
+                }
+                break;
+
+            default:
+                _copyBufferValue(p, t);
+            }
         }
-        if ((_objectId = jp.getObjectId()) != null) {
-            _hasNativeId = true;
+    }
+
+    // NOTE: Copied from earlier `copyCurrentEvent()`
+    private void _copyBufferValue(JsonParser p, JsonToken t) throws IOException
+    {
+        if (_mayHaveNativeIds) {
+            _checkNativeIds(p);
+        }
+        switch (t) {
+        case VALUE_STRING:
+            if (p.hasTextCharacters()) {
+                writeString(p.getTextCharacters(), p.getTextOffset(), p.getTextLength());
+            } else {
+                writeString(p.getText());
+            }
+            break;
+        case VALUE_NUMBER_INT:
+            switch (p.getNumberType()) {
+            case INT:
+                writeNumber(p.getIntValue());
+                break;
+            case BIG_INTEGER:
+                writeNumber(p.getBigIntegerValue());
+                break;
+            default:
+                writeNumber(p.getLongValue());
+            }
+            break;
+        case VALUE_NUMBER_FLOAT:
+            if (_forceBigDecimal) {
+                writeNumber(p.getDecimalValue());
+            } else {
+                // 09-Jul-2020, tatu: Used to just copy using most optimal method, but
+                //  issues like [databind#2644] force to use exact, not optimal type
+                final Number n = p.getNumberValueExact();
+                _appendValue(JsonToken.VALUE_NUMBER_FLOAT, n);
+            }
+            break;
+        case VALUE_TRUE:
+            writeBoolean(true);
+            break;
+        case VALUE_FALSE:
+            writeBoolean(false);
+            break;
+        case VALUE_NULL:
+            writeNull();
+            break;
+        case VALUE_EMBEDDED_OBJECT:
+            writeObject(p.getEmbeddedObject());
+            break;
+        default:
+            throw new RuntimeException("Internal error: unexpected token: "+t);
         }
     }
     
+    private final void _checkNativeIds(JsonParser p) throws IOException
+    {
+        if ((_typeId = p.getTypeId()) != null) {
+            _hasNativeId = true;
+        }
+        if ((_objectId = p.getObjectId()) != null) {
+            _hasNativeId = true;
+        }
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Internal methods
-    /**********************************************************
+    /**********************************************************************
      */
 
-    protected final void _append(JsonToken type)
-    {
-        Segment next = _hasNativeId
-                ? _last.append(_appendAt, type, _objectId, _typeId)
-                : _last.append(_appendAt, type);
-        if (next == null) {
-            ++_appendAt;
-        } else {
-            _last = next;
-            _appendAt = 1; // since we added first at 0
-        }
-    }
-
-    protected final void _append(JsonToken type, Object value)
-    {
-        Segment next = _hasNativeId
-                ? _last.append(_appendAt, type, value, _objectId, _typeId)
-                : _last.append(_appendAt, type, value);
-        if (next == null) {
-            ++_appendAt;
-        } else {
-            _last = next;
-            _appendAt = 1;
-        }
-    }
-
     /**
-     * Similar to {@link #_append(JsonToken)} but also updates context with
-     * knowledge that a scalar value was written
-     *
-     * @since 2.6.4
+     * Method used for appending token known to represent a "simple" scalar
+     * value where token is the only information
      */
     protected final void _appendValue(JsonToken type)
     {
-        _writeContext.writeValue();
-        Segment next = _hasNativeId
-                ? _last.append(_appendAt, type, _objectId, _typeId)
-                : _last.append(_appendAt, type);
+         _tokenWriteContext.writeValue();
+        Segment next;
+        if (_hasNativeId) {
+            next = _last.append(_appendAt, type, _objectId, _typeId);
+        } else {
+            next = _last.append(_appendAt, type);
+        }
         if (next == null) {
             ++_appendAt;
         } else {
@@ -1139,17 +1303,18 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
     }
 
     /**
-     * Similar to {@link #_append(JsonToken,Object)} but also updates context with
-     * knowledge that a scalar value was written
-     *
-     * @since 2.6.4
+     * Method used for appending token known to represent a scalar value
+     * where there is additional content (text, number) beyond type token
      */
     protected final void _appendValue(JsonToken type, Object value)
     {
-        _writeContext.writeValue();
-        Segment next = _hasNativeId
-                ? _last.append(_appendAt, type, value, _objectId, _typeId)
-                : _last.append(_appendAt, type, value);
+         _tokenWriteContext.writeValue();
+        Segment next;
+        if (_hasNativeId) {
+            next = _last.append(_appendAt, type, value, _objectId, _typeId);
+        } else {
+            next = _last.append(_appendAt, type, value);
+        }
         if (next == null) {
             ++_appendAt;
         } else {
@@ -1157,58 +1322,108 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             _appendAt = 1;
         }
     }
-    
-    protected final void _appendRaw(int rawType, Object value)
+
+    /*
+     * Specialized method used for appending a field name, appending either
+     * {@link String} or {@link SerializableString}.
+     *
+     * @since 2.10
+     */
+    protected final void _appendFieldName(Object value)
     {
-        Segment next = _hasNativeId
-                ? _last.appendRaw(_appendAt, rawType, value, _objectId, _typeId)
-                : _last.appendRaw(_appendAt, rawType, value);
+        // NOTE: do NOT clear _objectId / _typeId
+        Segment next;
+        if (_hasNativeId) {
+            next =  _last.append(_appendAt, JsonToken.FIELD_NAME, value, _objectId, _typeId);
+        } else {
+            next = _last.append(_appendAt, JsonToken.FIELD_NAME, value);
+        }
         if (next == null) {
             ++_appendAt;
         } else {
             _last = next;
             _appendAt = 1;
+        }
+    }
+
+    /**
+     * Specialized method used for appending a structural start Object/Array marker
+     */
+    protected final void _appendStartMarker(JsonToken type)
+    {
+        _tokenWriteContext.writeValue();
+
+        Segment next;
+        if (_hasNativeId) {
+            next =_last.append(_appendAt, type, _objectId, _typeId);
+        } else {
+            next =  _last.append(_appendAt, type);
+        }
+        if (next == null) {
+            ++_appendAt;
+        } else {
+            _last = next;
+            _appendAt = 1; // since we added first at 0
+        }
+    }
+
+    /**
+     * Specialized method used for appending a structural end Object/Array marker
+     */
+    protected final void _appendEndMarker(JsonToken type)
+    {
+        // NOTE: type/object id not relevant
+        Segment next = _last.append(_appendAt, type);
+        if (next == null) {
+            ++_appendAt;
+        } else {
+            _last = next;
+            _appendAt = 1;
+        }
+
+        // but then we need to update context. One twist: do allow unbalanced content;
+        // for that need to check that we will retain "root context"
+        SimpleTokenWriteContext c = _tokenWriteContext.getParent();
+        if (c != null) {
+            _tokenWriteContext = c;
         }
     }
 
     @Override
-    protected void _reportUnsupportedOperation() {
+    protected <T> T _reportUnsupportedOperation() {
         throw new UnsupportedOperationException("Called operation not supported for TokenBuffer");
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Supporting classes
-    /**********************************************************
+    /**********************************************************************
      */
 
     protected final static class Parser
         extends ParserMinimalBase
     {
         /*
-        /**********************************************************
+        /******************************************************************
         /* Configuration
-        /**********************************************************
+        /******************************************************************
          */
-
-        protected ObjectCodec _codec;
 
         /**
-         * @since 2.3
+         * @since 3.0
          */
+        protected final TokenBuffer _source;
+
         protected final boolean _hasNativeTypeIds;
 
-        /**
-         * @since 2.3
-         */
         protected final boolean _hasNativeObjectIds;
 
         protected final boolean _hasNativeIds;
         
         /*
-        /**********************************************************
+        /******************************************************************
         /* Parsing state
-        /**********************************************************
+        /******************************************************************
          */
 
         /**
@@ -1225,7 +1440,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
          * Information about parser context, context in which
          * the next token is to be parsed (root, array, object).
          */
-        protected JsonReadContext _parsingContext;
+        protected TokenBufferReadContext _parsingContext;
         
         protected boolean _closed;
 
@@ -1234,20 +1449,20 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         protected JsonLocation _location = null;
         
         /*
-        /**********************************************************
+        /******************************************************************
         /* Construction, init
-        /**********************************************************
+        /******************************************************************
          */
 
-        public Parser(Segment firstSeg, ObjectCodec codec,
-                boolean hasNativeTypeIds,
-                boolean hasNativeObjectIds)
+        public Parser(ObjectReadContext readCtxt, TokenBuffer source,
+                Segment firstSeg, boolean hasNativeTypeIds, boolean hasNativeObjectIds,
+                TokenStreamContext parentContext)
         {
-            super(0);
+            super(readCtxt, 0);
+            _source = source;
             _segment = firstSeg;
             _segmentPtr = -1; // not yet read
-            _codec = codec;
-            _parsingContext = JsonReadContext.createRootContext(null);
+            _parsingContext = TokenBufferReadContext.createRootContext(parentContext);
             _hasNativeTypeIds = hasNativeTypeIds;
             _hasNativeObjectIds = hasNativeObjectIds;
             _hasNativeIds = (hasNativeTypeIds | hasNativeObjectIds);
@@ -1256,22 +1471,36 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         public void setLocation(JsonLocation l) {
             _location = l;
         }
-        
-        @Override
-        public ObjectCodec getCodec() { return _codec; }
 
-        @Override
-        public void setCodec(ObjectCodec c) { _codec = c; }
+        /*
+        /**********************************************************
+        /* Public API, config access, capability introspection
+        /**********************************************************
+         */
 
         @Override
         public Version version() {
             return com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION;
         }
 
+        // 20-May-2020, tatu: This may or may not be enough -- ideally access is
+        //    via `DeserializationContext`, not parser, but if latter is needed
+        //    then we'll need to pass this from parser contents if which were
+        //    buffered.
+        @Override
+        public JacksonFeatureSet<StreamReadCapability> getReadCapabilities() {
+            return DEFAULT_READ_CAPABILITIES;
+        }
+
+        @Override
+        public TokenBuffer getInputSource() {
+            return _source;
+        }
+
         /*
-        /**********************************************************
+        /******************************************************************
         /* Extended API beyond JsonParser
-        /**********************************************************
+        /******************************************************************
          */
         
         public JsonToken peekNextToken() throws IOException
@@ -1286,11 +1515,11 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             }
             return (seg == null) ? null : seg.type(ptr);
         }
-        
+
         /*
-        /**********************************************************
+        /******************************************************************
         /* Closeable implementation
-        /**********************************************************
+        /******************************************************************
          */
 
         @Override
@@ -1301,22 +1530,26 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         }
 
         /*
-        /**********************************************************
+        /******************************************************************
         /* Public API, traversal
-        /**********************************************************
+        /******************************************************************
          */
         
         @Override
         public JsonToken nextToken() throws IOException
         {
             // If we are closed, nothing more to do
-            if (_closed || (_segment == null)) return null;
+            if (_closed || (_segment == null)) {
+                _currToken = null;
+                return null;
+            }
 
             // Ok, then: any more tokens?
             if (++_segmentPtr >= Segment.TOKENS_PER_SEGMENT) {
                 _segmentPtr = 0;
                 _segment = _segment.next();
                 if (_segment == null) {
+                    _currToken = null;
                     return null;
                 }
             }
@@ -1327,17 +1560,15 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
                 String name = (ob instanceof String) ? ((String) ob) : ob.toString();
                 _parsingContext.setCurrentName(name);
             } else if (_currToken == JsonToken.START_OBJECT) {
-                _parsingContext = _parsingContext.createChildObjectContext(-1, -1);
+                _parsingContext = _parsingContext.createChildObjectContext();
             } else if (_currToken == JsonToken.START_ARRAY) {
-                _parsingContext = _parsingContext.createChildArrayContext(-1, -1);
+                _parsingContext = _parsingContext.createChildArrayContext();
             } else if (_currToken == JsonToken.END_OBJECT
                     || _currToken == JsonToken.END_ARRAY) {
                 // Closing JSON Object/Array? Close matching context
-                _parsingContext = _parsingContext.getParent();
-                // but allow unbalanced cases too (more close markers)
-                if (_parsingContext == null) {
-                    _parsingContext = JsonReadContext.createRootContext(null);
-                }
+                _parsingContext = _parsingContext.parentOrCopy();
+            } else {
+                _parsingContext.updateForValue();
             }
             return _currToken;
         }
@@ -1346,31 +1577,49 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         public String nextFieldName() throws IOException
         {
             // inlined common case from nextToken()
-            if (_closed || (_segment == null)) return null;
+            if (_closed || (_segment == null)) {
+                return null;
+            }
 
             int ptr = _segmentPtr+1;
-            if (ptr < Segment.TOKENS_PER_SEGMENT && _segment.type(ptr) == JsonToken.FIELD_NAME) {
+            if ((ptr < Segment.TOKENS_PER_SEGMENT) && (_segment.type(ptr) == JsonToken.FIELD_NAME)) {
                 _segmentPtr = ptr;
+                _currToken = JsonToken.FIELD_NAME;
                 Object ob = _segment.get(ptr); // inlined _currentObject();
                 String name = (ob instanceof String) ? ((String) ob) : ob.toString();
                 _parsingContext.setCurrentName(name);
                 return name;
             }
-            return (nextToken() == JsonToken.FIELD_NAME) ? getCurrentName() : null;
+            return (nextToken() == JsonToken.FIELD_NAME) ? currentName() : null;
+        }
+
+        // NOTE: since we know there's no native matching just use simpler way:
+        @Override // since 3.0
+        public int nextFieldName(FieldNameMatcher matcher) throws IOException {
+            String str = nextFieldName();
+            if (str != null) {
+                // 15-Nov-2017, tatu: Can not assume name given is intern()ed
+                return matcher.matchName(str);
+            }
+            if (hasToken(JsonToken.END_OBJECT)) {
+                return FieldNameMatcher.MATCH_END_OBJECT;
+            }
+            return FieldNameMatcher.MATCH_ODD_TOKEN;
         }
 
         @Override
         public boolean isClosed() { return _closed; }
 
         /*
-        /**********************************************************
+        /******************************************************************
         /* Public API, token accessors
-        /**********************************************************
+        /******************************************************************
          */
 
-        @Override
-        public JsonStreamContext getParsingContext() { return _parsingContext; }
-
+        @Override public TokenStreamContext getParsingContext() { return _parsingContext; }
+        @Override public void setCurrentValue(Object v) { _parsingContext.setCurrentValue(v); }
+        @Override public Object getCurrentValue() { return _parsingContext.getCurrentValue(); }
+        
         @Override
         public JsonLocation getTokenLocation() { return getCurrentLocation(); }
 
@@ -1380,34 +1629,19 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         }
 
         @Override
-        public String getCurrentName() {
+        public String currentName() {
             // 25-Jun-2015, tatu: as per [databind#838], needs to be same as ParserBase
             if (_currToken == JsonToken.START_OBJECT || _currToken == JsonToken.START_ARRAY) {
-                JsonReadContext parent = _parsingContext.getParent();
-                return parent.getCurrentName();
+                TokenStreamContext parent = _parsingContext.getParent();
+                return parent.currentName();
             }
-            return _parsingContext.getCurrentName();
-        }
-
-        @Override
-        public void overrideCurrentName(String name)
-        {
-            // Simple, but need to look for START_OBJECT/ARRAY's "off-by-one" thing:
-            JsonReadContext ctxt = _parsingContext;
-            if (_currToken == JsonToken.START_OBJECT || _currToken == JsonToken.START_ARRAY) {
-                ctxt = ctxt.getParent();
-            }
-            try {
-                ctxt.setCurrentName(name);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+            return _parsingContext.currentName();
         }
 
         /*
-        /**********************************************************
+        /******************************************************************
         /* Public API, access to token information, text
-        /**********************************************************
+        /******************************************************************
          */
 
         @Override
@@ -1420,7 +1654,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
                 if (ob instanceof String) {
                     return (String) ob;
                 }
-                return (ob == null) ? null : ob.toString();
+                return ClassUtil.nullOrToString(ob);
             }
             if (_currToken == null) {
                 return null;
@@ -1428,8 +1662,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             switch (_currToken) {
             case VALUE_NUMBER_INT:
             case VALUE_NUMBER_FLOAT:
-                Object ob = _currentObject();
-                return (ob == null) ? null : ob.toString();
+                return ClassUtil.nullOrToString(_currentObject());
             default:
             	return _currToken.asString();
             }
@@ -1455,12 +1688,27 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             // We never have raw buffer available, so:
             return false;
         }
-        
+
         /*
-        /**********************************************************
+        /******************************************************************
         /* Public API, access to token information, numeric
-        /**********************************************************
+        /******************************************************************
          */
+
+        @Override
+        public boolean isNaN() {
+            // can only occur for floating-point numbers
+            if (_currToken == JsonToken.VALUE_NUMBER_FLOAT) {
+                Object value = _currentObject();
+                if (value instanceof Double) {
+                    return NumberOutput.notFinite( (Double) value);
+                }
+                if (value instanceof Float) {
+                    return NumberOutput.notFinite( (Float) value);
+                }
+            }
+            return false;
+        }
 
         @Override
         public BigInteger getBigIntegerValue() throws IOException
@@ -1508,16 +1756,22 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         @Override
         public int getIntValue() throws IOException
         {
-            // optimize common case:
-            if (_currToken == JsonToken.VALUE_NUMBER_INT) {
-                return ((Number) _currentObject()).intValue();
+            Number n = (_currToken == JsonToken.VALUE_NUMBER_INT) ?
+                    ((Number) _currentObject()) : getNumberValue();
+            if ((n instanceof Integer) || _smallerThanInt(n)) {
+                return n.intValue();
             }
-            return getNumberValue().intValue();
+            return _convertNumberToInt(n);
         }
 
         @Override
         public long getLongValue() throws IOException {
-            return getNumberValue().longValue();
+            Number n = (_currToken == JsonToken.VALUE_NUMBER_INT) ?
+                    ((Number) _currentObject()) : getNumberValue();
+            if ((n instanceof Long) || _smallerThanLong(n)) {
+                return n.longValue();
+            }
+            return _convertNumberToLong(n);
         }
 
         @Override
@@ -1542,7 +1796,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
                 return (Number) value;
             }
             // Difficult to really support numbers-as-Strings; but let's try.
-            // NOTE: no access to DeserializationConfig, unfortunately, so can not
+            // NOTE: no access to DeserializationConfig, unfortunately, so cannot
             // try to determine Double/BigDecimal preference...
             if (value instanceof String) {
                 String str = (String) value;
@@ -1558,10 +1812,82 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
                     +value.getClass().getName());
         }
 
+        private final boolean _smallerThanInt(Number n) {
+            return (n instanceof Short) || (n instanceof Byte);
+        }
+
+        private final boolean _smallerThanLong(Number n) {
+            return (n instanceof Integer) || (n instanceof Short) || (n instanceof Byte);
+        }
+
+        // 02-Jan-2017, tatu: Modified from method(s) in `ParserBase`
+        
+        protected int _convertNumberToInt(Number n) throws IOException
+        {
+            if (n instanceof Long) {
+                long l = n.longValue();
+                int result = (int) l;
+                if (((long) result) != l) {
+                    reportOverflowInt();
+                }
+                return result;
+            }
+            if (n instanceof BigInteger) {
+                BigInteger big = (BigInteger) n;
+                if (BI_MIN_INT.compareTo(big) > 0 
+                        || BI_MAX_INT.compareTo(big) < 0) {
+                    reportOverflowInt();
+                }
+            } else if ((n instanceof Double) || (n instanceof Float)) {
+                double d = n.doubleValue();
+                // Need to check boundaries
+                if (d < MIN_INT_D || d > MAX_INT_D) {
+                    reportOverflowInt();
+                }
+                return (int) d;
+            } else if (n instanceof BigDecimal) {
+                BigDecimal big = (BigDecimal) n;
+                if (BD_MIN_INT.compareTo(big) > 0 
+                    || BD_MAX_INT.compareTo(big) < 0) {
+                    reportOverflowInt();
+                }
+            } else {
+                _throwInternal();
+            }
+            return n.intValue();
+        }
+
+        protected long _convertNumberToLong(Number n) throws IOException
+        {
+            if (n instanceof BigInteger) {
+                BigInteger big = (BigInteger) n;
+                if (BI_MIN_LONG.compareTo(big) > 0 
+                        || BI_MAX_LONG.compareTo(big) < 0) {
+                    reportOverflowLong();
+                }
+            } else if ((n instanceof Double) || (n instanceof Float)) {
+                double d = n.doubleValue();
+                // Need to check boundaries
+                if (d < MIN_LONG_D || d > MAX_LONG_D) {
+                    reportOverflowLong();
+                }
+                return (long) d;
+            } else if (n instanceof BigDecimal) {
+                BigDecimal big = (BigDecimal) n;
+                if (BD_MIN_LONG.compareTo(big) > 0 
+                    || BD_MAX_LONG.compareTo(big) < 0) {
+                    reportOverflowLong();
+                }
+            } else {
+                _throwInternal();
+            }
+            return n.longValue();
+        }
+
         /*
-        /**********************************************************
+        /******************************************************************
         /* Public API, access to token information, other
-        /**********************************************************
+        /******************************************************************
          */
 
         @Override
@@ -1587,7 +1913,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
                 // fall through to error case
             }
             if (_currToken != JsonToken.VALUE_STRING) {
-                throw _constructError("Current token ("+_currToken+") not VALUE_STRING (or VALUE_EMBEDDED_OBJECT with byte[]), can not access as binary");
+                throw _constructError("Current token ("+_currToken+") not VALUE_STRING (or VALUE_EMBEDDED_OBJECT with byte[]), cannot access as binary");
             }
             final String str = getText();
             if (str == null) {
@@ -1615,9 +1941,9 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         }
 
         /*
-        /**********************************************************
+        /******************************************************************
         /* Public API, native ids
-        /**********************************************************
+        /******************************************************************
          */
 
         @Override
@@ -1641,9 +1967,9 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         }
         
         /*
-        /**********************************************************
+        /******************************************************************
         /* Internal methods
-        /**********************************************************
+        /******************************************************************
          */
 
         protected final Object _currentObject() {
@@ -1653,7 +1979,7 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
         protected final void _checkIsNumber() throws JsonParseException
         {
             if (_currToken == null || !_currToken.isNumeric()) {
-                throw _constructError("Current token ("+_currToken+") not numeric, can not use numeric value accessors");
+                throw _constructError("Current token ("+_currToken+") not numeric, cannot use numeric value accessors");
             }
         }
 
@@ -1795,29 +2121,6 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             return _next;
         }
 
-        public Segment appendRaw(int index, int rawTokenType, Object value)
-        {
-            if (index < TOKENS_PER_SEGMENT) {
-                set(index, rawTokenType, value);
-                return null;
-            }
-            _next = new Segment();
-            _next.set(0, rawTokenType, value);
-            return _next;
-        }
-
-        public Segment appendRaw(int index, int rawTokenType, Object value,
-                Object objectId, Object typeId)
-        {
-            if (index < TOKENS_PER_SEGMENT) {
-                set(index, rawTokenType, value, objectId, typeId);
-                return null;
-            }
-            _next = new Segment();
-            _next.set(0, rawTokenType, value, objectId, typeId);
-            return _next;
-        }
-
         private void set(int index, JsonToken tokenType)
         {
             /* Assumption here is that there are no overwrites, just appends;
@@ -1863,27 +2166,6 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             assignNativeIds(index, objectId, typeId);
         }
 
-        private void set(int index, int rawTokenType, Object value)
-        {
-            _tokens[index] = value;
-            long typeCode = (long) rawTokenType;
-            if (index > 0) {
-                typeCode <<= (index << 2);
-            }
-            _tokenTypes |= typeCode;
-        }
-
-        private void set(int index, int rawTokenType, Object value, Object objectId, Object typeId)
-        {
-            _tokens[index] = value;
-            long typeCode = (long) rawTokenType;
-            if (index > 0) {
-                typeCode <<= (index << 2);
-            }
-            _tokenTypes |= typeCode;
-            assignNativeIds(index, objectId, typeId);
-        }
-
         private final void assignNativeIds(int index, Object objectId, Object typeId)
         {
             if (_nativeIds == null) {
@@ -1897,17 +2179,11 @@ sb.append("NativeObjectIds=").append(_hasNativeObjectIds).append(",");
             }
         }
 
-        /**
-         * @since 2.3
-         */
-        public Object findObjectId(int index) {
+        private Object findObjectId(int index) {
             return (_nativeIds == null) ? null : _nativeIds.get(_objectIdIndex(index));
         }
-        
-        /**
-         * @since 2.3
-         */
-        public Object findTypeId(int index) {
+
+        private Object findTypeId(int index) {
             return (_nativeIds == null) ? null : _nativeIds.get(_typeIdIndex(index));
         }
 

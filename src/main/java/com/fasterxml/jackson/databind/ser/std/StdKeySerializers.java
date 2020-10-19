@@ -8,17 +8,12 @@ import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
 import com.fasterxml.jackson.databind.ser.impl.PropertySerializerMap;
+import com.fasterxml.jackson.databind.util.ClassUtil;
 import com.fasterxml.jackson.databind.util.EnumValues;
 
-@SuppressWarnings("serial")
-public class StdKeySerializers
+public abstract class StdKeySerializers
 {
-    @SuppressWarnings("deprecation")
-    protected final static JsonSerializer<Object> DEFAULT_KEY_SERIALIZER = new StdKeySerializer();
-
     protected final static JsonSerializer<Object> DEFAULT_STRING_SERIALIZER = new StringKeySerializer();
-
-    private StdKeySerializers() { }
 
     /**
      * @param config Serialization configuration in use, may be needed in choosing
@@ -31,7 +26,7 @@ public class StdKeySerializers
             Class<?> rawKeyType, boolean useDefault)
     {
         // 24-Sep-2015, tatu: Important -- should ONLY consider types for which `@JsonValue`
-        //    can not be used, since caller has not yet checked for that annotation
+        //    cannot be used, since caller has not yet checked for that annotation
         //    This is why Enum types are not handled here quite yet
 
         // [databind#943: Use a dynamic key serializer if we are not given actual
@@ -41,6 +36,15 @@ public class StdKeySerializers
         }
         if (rawKeyType == String.class) {
             return DEFAULT_STRING_SERIALIZER;
+        }
+        if (rawKeyType.isPrimitive()) {
+            rawKeyType = ClassUtil.wrapperType(rawKeyType);
+        }
+        if (rawKeyType == Integer.class) {
+            return new Default(Default.TYPE_INTEGER, rawKeyType);
+        }
+        if (rawKeyType == Long.class) {
+            return new Default(Default.TYPE_LONG, rawKeyType);
         }
         if (rawKeyType.isPrimitive() || Number.class.isAssignableFrom(rawKeyType)) {
             // 28-Jun-2016, tatu: Used to just return DEFAULT_KEY_SERIALIZER, but makes
@@ -60,8 +64,12 @@ public class StdKeySerializers
         if (rawKeyType == java.util.UUID.class) {
             return new Default(Default.TYPE_TO_STRING, rawKeyType);
         }
+        if (rawKeyType == byte[].class) {
+            return new Default(Default.TYPE_BYTE_ARRAY, rawKeyType);
+        }
         if (useDefault) {
-            return DEFAULT_KEY_SERIALIZER;
+            // 19-Oct-2016, tatu: Used to just return DEFAULT_KEY_SERIALIZER but why not:
+            return new Default(Default.TYPE_TO_STRING, rawKeyType);
         }
         return null;
     }
@@ -69,8 +77,6 @@ public class StdKeySerializers
     /**
      * Method called if no specified key serializer was located; will return a
      * "default" key serializer.
-     *
-     * @since 2.7
      */
     @SuppressWarnings("unchecked")
     public static JsonSerializer<Object> getFallbackKeySerializer(SerializationConfig config,
@@ -86,20 +92,15 @@ public class StdKeySerializers
             if (rawKeyType == Enum.class) {
                 return new Dynamic();
             }
-            if (rawKeyType.isEnum()) {
+            // 29-Sep-2019, tatu: [databind#2457] can not use 'rawKeyType.isEnum()`, won't work
+            //    for subtypes.
+            if (ClassUtil.isEnumType(rawKeyType)) {
                 return EnumKeySerializer.construct(rawKeyType,
                         EnumValues.constructFromName(config, (Class<Enum<?>>) rawKeyType));
             }
         }
-        return DEFAULT_KEY_SERIALIZER;
-    }
-
-    /**
-     * @deprecated since 2.7
-     */
-    @Deprecated
-    public static JsonSerializer<Object> getDefault() {
-        return DEFAULT_KEY_SERIALIZER;
+        // 19-Oct-2016, tatu: Used to just return DEFAULT_KEY_SERIALIZER but why not:
+        return new Default(Default.TYPE_TO_STRING, rawKeyType);
     }
 
     /*
@@ -121,12 +122,15 @@ public class StdKeySerializers
         final static int TYPE_CALENDAR = 2;
         final static int TYPE_CLASS = 3;
         final static int TYPE_ENUM = 4;
-        final static int TYPE_TO_STRING = 5;
+        final static int TYPE_INTEGER = 5; // since 2.9
+        final static int TYPE_LONG = 6; // since 2.9
+        final static int TYPE_BYTE_ARRAY = 7; // since 2.9
+        final static int TYPE_TO_STRING = 8;
 
         protected final int _typeId;
         
         public Default(int typeId, Class<?> type) {
-            super(type, false);
+            super(type);
             _typeId = typeId;
         }
 
@@ -150,13 +154,24 @@ public class StdKeySerializers
                         key = value.toString();
                     } else {
                         Enum<?> e = (Enum<?>) value;
-                        if (provider.isEnabled(SerializationFeature.WRITE_ENUMS_USING_INDEX)) {
+                        // 14-Sep-2019, tatu: [databind#2129] Use this specific feature
+                        if (provider.isEnabled(SerializationFeature.WRITE_ENUM_KEYS_USING_INDEX)) {
                             key = String.valueOf(e.ordinal());
                         } else {
                             key = e.name();
                         }
                     }
                     g.writeFieldName(key);
+                }
+                break;
+            case TYPE_INTEGER:
+            case TYPE_LONG:
+                g.writeFieldId(((Number) value).longValue());
+                break;
+            case TYPE_BYTE_ARRAY:
+                {
+                    String encoded = provider.getConfig().getBase64Variant().encode((byte[]) value);
+                    g.writeFieldName(encoded);
                 }
                 break;
             case TYPE_TO_STRING:
@@ -176,7 +191,7 @@ public class StdKeySerializers
         protected transient PropertySerializerMap _dynamicSerializers;
         
         public Dynamic() {
-            super(String.class, false);
+            super(String.class);
             _dynamicSerializers = PropertySerializerMap.emptyForProperties();
         }
 
@@ -230,7 +245,7 @@ public class StdKeySerializers
      */
     public static class StringKeySerializer extends StdSerializer<Object>
     {
-        public StringKeySerializer() { super(String.class, false); }
+        public StringKeySerializer() { super(String.class); }
 
         @Override
         public void serialize(Object value, JsonGenerator g, SerializerProvider provider) throws IOException {
@@ -240,15 +255,13 @@ public class StdKeySerializers
 
     /**
      * Specialized instance to use for Enum keys, as per [databind#1322]
-     *
-     * @since 2.8
      */
     public static class EnumKeySerializer extends StdSerializer<Object>
     {
         protected final EnumValues _values;
 
         protected EnumKeySerializer(Class<?> enumType, EnumValues values) {
-            super(enumType, false);
+            super(enumType);
             _values = values;
         }
 
@@ -267,7 +280,8 @@ public class StdKeySerializers
                 return;
             }
             Enum<?> en = (Enum<?>) value;
-            if (serializers.isEnabled(SerializationFeature.WRITE_ENUMS_USING_INDEX)) {
+            // 14-Sep-2019, tatu: [databind#2129] Use this specific feature
+            if (serializers.isEnabled(SerializationFeature.WRITE_ENUM_KEYS_USING_INDEX)) {
                 g.writeFieldName(String.valueOf(en.ordinal()));
                 return;
             }

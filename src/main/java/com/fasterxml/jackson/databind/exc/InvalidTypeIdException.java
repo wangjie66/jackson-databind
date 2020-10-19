@@ -2,16 +2,14 @@ package com.fasterxml.jackson.databind.exc;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.JsonMappingException;
 
 /**
  * Exception thrown when resolution of a type id fails.
- *
- * @since 2.8
  */
-public class InvalidTypeIdException extends JsonMappingException
+public class InvalidTypeIdException
+    extends MismatchedInputException
 {
-    private static final long serialVersionUID = 1L; // silly Eclipse, warnings
+    private static final long serialVersionUID = 3L;
 
     /**
      * Basetype for which subtype was to be resolved
@@ -19,14 +17,15 @@ public class InvalidTypeIdException extends JsonMappingException
     protected final JavaType _baseType;
 
     /**
-     * Type id that failed to be resolved to a subtype
+     * Type id that failed to be resolved to a subtype; `null` in cases
+     * where no type id was located.
      */
     protected final String _typeId;
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
      */
 
     public InvalidTypeIdException(JsonParser p, String msg,
@@ -43,9 +42,9 @@ public class InvalidTypeIdException extends JsonMappingException
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Accessors
-    /**********************************************************
+    /**********************************************************************
      */
 
     public JavaType getBaseType() { return _baseType; }

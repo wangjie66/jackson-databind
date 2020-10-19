@@ -20,9 +20,9 @@ import com.fasterxml.jackson.databind.cfg.ConfigFeature;
 public enum DeserializationFeature implements ConfigFeature
 {
     /*
-    /******************************************************
-    /* Type conversion features
-    /******************************************************
+    /**********************************************************************
+    /* Value (mostly scalar) mapping features
+    /**********************************************************************
      */
 
     /**
@@ -33,7 +33,13 @@ public enum DeserializationFeature implements ConfigFeature
      * or {@link java.util.Collection} context) is available.
      * If enabled such values will be deserialized as {@link java.math.BigDecimal}s;
      * if disabled, will be deserialized as {@link Double}s.
-     * <p>
+     *<p>
+     * NOTE: one aspect of {@link java.math.BigDecimal} handling that may need
+     * configuring is whether trailing zeroes are trimmed:
+     * {@link com.fasterxml.jackson.databind.node.JsonNodeFactory} has
+     * {@link com.fasterxml.jackson.databind.node.JsonNodeFactory#withExactBigDecimals} for
+     * changing default behavior (default is for trailing zeroes to be trimmed).
+     *<p>
      * Feature is disabled by default, meaning that "untyped" floating
      * point numbers will by default be deserialized as {@link Double}s
      * (choice is for performance reason -- BigDecimals are slower than
@@ -77,8 +83,6 @@ public enum DeserializationFeature implements ConfigFeature
      * Feature is disabled by default, meaning that "untyped" integral
      * numbers will by default be deserialized using {@link java.lang.Integer}
      * if value fits.
-     * 
-     * @since 2.6
      */
     USE_LONG_FOR_INTS(false),
     
@@ -92,24 +96,11 @@ public enum DeserializationFeature implements ConfigFeature
      * {@link java.util.List}s.
      */
     USE_JAVA_ARRAY_FOR_JSON_ARRAY(false),
-    
-    /**
-     * Feature that determines standard deserialization mechanism used for
-     * Enum values: if enabled, Enums are assumed to have been serialized  using
-     * return value of <code>Enum.toString()</code>;
-     * if disabled, return value of {@code Enum.name()} is assumed to have been used.
-     *<p>
-     * Note: this feature should usually have same value
-     * as {@link SerializationFeature#WRITE_ENUMS_USING_TO_STRING}.
-     *<p>
-     * Feature is disabled by default.
-     */
-    READ_ENUMS_USING_TO_STRING(false),
-    
+
     /*
-    /******************************************************
-     *  Error handling features
-    /******************************************************
+    /**********************************************************************
+    /* Error handling features
+    /**********************************************************************
      */
 
     /**
@@ -156,13 +147,11 @@ public enum DeserializationFeature implements ConfigFeature
     /**
      * Feature that determines what happens when type of a polymorphic
      * value (indicated for example by {@link com.fasterxml.jackson.annotation.JsonTypeInfo})
-     * can not be found (missing) or resolved (invalid class name, unmappable id);
+     * cannot be found (missing) or resolved (invalid class name, unmappable id);
      * if enabled, an exception ir thrown; if false, null value is used instead.
      *<p>
      * Feature is enabled by default so that exception is thrown for missing or invalid
      * type information.
-     * 
-     * @since 2.2
      */
     FAIL_ON_INVALID_SUBTYPE(true),
 
@@ -178,8 +167,6 @@ public enum DeserializationFeature implements ConfigFeature
      * keys. New features may be added to control additional cases.
      *<p>
      * Feature is disabled by default so that no exception is thrown.
-     * 
-     * @since 2.3
      */
     FAIL_ON_READING_DUP_TREE_KEY(false),
 
@@ -189,8 +176,6 @@ public enum DeserializationFeature implements ConfigFeature
      * {@link JsonMappingException} is thrown; if false, property is quietly skipped.
      *<p>
      * Feature is disabled by default so that no exception is thrown.
-     *
-     * @since 2.3
      */
     FAIL_ON_IGNORED_PROPERTIES(false),
 
@@ -205,8 +190,6 @@ public enum DeserializationFeature implements ConfigFeature
      *<p>
      * Feature is enabled by default, so that unknown Object Ids will result in an
      * exception being thrown, at the end of deserialization.
-     * 
-     * @since 2.5
      */
     FAIL_ON_UNRESOLVED_OBJECT_IDS(true),
 
@@ -226,8 +209,6 @@ public enum DeserializationFeature implements ConfigFeature
      *<p>
      * Feature is disabled by default, so that no exception is thrown for missing creator
      * property values, unless they are explicitly marked as `required`.
-     * 
-     * @since 2.6
      */
     FAIL_ON_MISSING_CREATOR_PROPERTIES(false),
 
@@ -239,8 +220,6 @@ public enum DeserializationFeature implements ConfigFeature
       * if you are using Java or Scala optionals for non-mandatory fields.
       * Feature is disabled by default, so that no exception is thrown for missing creator
       * property values, unless they are explicitly marked as `required`.
-      *
-      * @since 2.8
       */
     FAIL_ON_NULL_CREATOR_PROPERTIES(false),
 
@@ -253,11 +232,27 @@ public enum DeserializationFeature implements ConfigFeature
      *<p>
      * Feature is enabled by default, so that exception is thrown when a subtype property is
      * missing.
-     *
-     * @since 2.9
      */
     FAIL_ON_MISSING_EXTERNAL_TYPE_ID_PROPERTY(true),
 
+    /**
+     * Feature that determines behaviour for data-binding after binding the root value.
+     * If feature is enabled, one more call to
+     * {@link com.fasterxml.jackson.core.JsonParser#nextToken} is made to ensure that
+     * no more tokens are found (and if any is found,
+     * {@link com.fasterxml.jackson.databind.exc.MismatchedInputException} is thrown); if
+     * disabled, no further checks are made.
+     *<p>
+     * Feature could alternatively be called <code>READ_FULL_STREAM</code>, since it
+     * effectively verifies that input stream contains only as much data as is needed
+     * for binding the full value, and nothing more (except for possible ignorable
+     * white space or comments, if supported by data format).
+     *<p>
+     * Feature is disabled by default (so that no check is made for possible trailing
+     * token(s)) for backwards compatibility reasons.
+     */
+    FAIL_ON_TRAILING_TOKENS(false),
+    
     /**
      * Feature that determines whether Jackson code should catch
      * and wrap {@link Exception}s (but never {@link Error}s!)
@@ -276,9 +271,9 @@ public enum DeserializationFeature implements ConfigFeature
     WRAP_EXCEPTIONS(true),
 
     /*
-    /******************************************************
+    /**********************************************************************
     /* Structural conversion features
-    /******************************************************
+    /**********************************************************************
      */
 
     /**
@@ -301,7 +296,6 @@ public enum DeserializationFeature implements ConfigFeature
      * <p>
      * 
      * Feature is disabled by default
-     * @since 2.4
      */
     UNWRAP_SINGLE_VALUE_ARRAYS(false),
 
@@ -318,19 +312,24 @@ public enum DeserializationFeature implements ConfigFeature
     UNWRAP_ROOT_VALUE(false),
 
     /*
-    /******************************************************
-    /* Value conversion features
-    /******************************************************
+    /**********************************************************************
+    /* Value conversion/coercion features
+    /**********************************************************************
      */
-    
+
     /**
      * Feature that can be enabled to allow JSON empty String
-     * value ("") to be bound to POJOs as null.
-     * If disabled, standard POJOs can only be bound from JSON null or
+     * value ("") to be bound as `null` for POJOs and other structured
+     * values ({@link java.util.Map}s, {@link java.util.Collection}s).
+     * If disabled, standard POJOs can only be bound from JSON `null` or
      * JSON Object (standard meaning that no custom deserializers or
      * constructors are defined; both of which can add support for other
      * kinds of JSON values); if enabled, empty JSON String can be taken
      * to be equivalent of JSON null.
+     *<p>
+     * NOTE: this does NOT apply to scalar values such as booleans and numbers;
+     * whether they can be coerced depends on
+     * {@link MapperFeature#ALLOW_COERCION_OF_SCALARS}.
      *<p>
      * Feature is disabled by default.
      */
@@ -338,16 +337,15 @@ public enum DeserializationFeature implements ConfigFeature
 
     /**
      * Feature that can be enabled to allow empty JSON Array
-     * value (that is, <code>[ ]</code>) to be bound to POJOs as null.
-     * If disabled, standard POJOs can only be bound from JSON null or
+     * value (that is, <code>[ ]</code>) to be bound to POJOs (and
+     * with 2.9, other values too) as `null`.
+     * If disabled, standard POJOs can only be bound from JSON `null` or
      * JSON Object (standard meaning that no custom deserializers or
      * constructors are defined; both of which can add support for other
      * kinds of JSON values); if enabled, empty JSON Array will be taken
      * to be equivalent of JSON null.
      *<p>
      * Feature is disabled by default.
-     * 
-     * @since 2.5
      */
     ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT(false),
 
@@ -360,11 +358,22 @@ public enum DeserializationFeature implements ConfigFeature
      * will be thrown.
      *<p>
      * Feature is enabled by default.
-     * 
-     * @since 2.6
      */
     ACCEPT_FLOAT_AS_INT(true),
-    
+
+    /**
+     * Feature that determines standard deserialization mechanism used for
+     * Enum values: if enabled, Enums are assumed to have been serialized  using
+     * return value of <code>Enum.toString()</code>;
+     * if disabled, return value of <code>Enum.name()</code> is assumed to have been used.
+     *<p>
+     * Note: this feature should usually have same value
+     * as {@link SerializationFeature#WRITE_ENUMS_USING_TO_STRING}.
+     *<p>
+     * Feature is disabled by default.
+     */
+    READ_ENUMS_USING_TO_STRING(false),
+
     /**
      * Feature that allows unknown Enum values to be parsed as null values. 
      * If disabled, unknown Enum values will throw exceptions.
@@ -375,8 +384,6 @@ public enum DeserializationFeature implements ConfigFeature
      * cases).
      *<p>
      * Feature is disabled by default.
-     * 
-     * @since 2.0
      */
     READ_UNKNOWN_ENUM_VALUES_AS_NULL(false),
 
@@ -387,8 +394,6 @@ public enum DeserializationFeature implements ConfigFeature
      * If enabled, but no predefined default Enum value is specified, an exception will be thrown as well.
      *<p>
      * Feature is disabled by default.
-     *
-     * @since 2.8
      */
     READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE(false),
 
@@ -404,8 +409,6 @@ public enum DeserializationFeature implements ConfigFeature
      * This is the counterpart to {@link SerializationFeature#WRITE_DATE_TIMESTAMPS_AS_NANOSECONDS}.
      *<p>
      * Feature is enabled by default, to support most accurate time values possible.
-     * 
-     * @since 2.2
      */
     READ_DATE_TIMESTAMPS_AS_NANOSECONDS(true),
 
@@ -420,18 +423,21 @@ public enum DeserializationFeature implements ConfigFeature
      * Note that exact behavior depends on date/time types in question; and specifically
      * JDK type of {@link java.util.Date} does NOT have in-built timezone information
      * so this setting has no effect.
+     * Further, while {@link java.util.Calendar} does have this information basic
+     * JDK {@link java.text.SimpleDateFormat} is unable to retain parsed zone information,
+     * and as a result, {@link java.util.Calendar} will always get context timezone
+     * adjustment regardless of this setting.
      *<p>
-     * As of Jackson 2.8, this feature is supported only by extension modules for Joda
-     * and Java 8 date/tyime datatypes.
-     * 
-     * @since 2.2
+     *<p>
+     * Taking above into account, this feature is supported only by extension modules for
+     * Joda and Java 8 date/time datatypes.
      */
     ADJUST_DATES_TO_CONTEXT_TIME_ZONE(true),
 
     /*
-    /******************************************************
+    /**********************************************************************
     /* Other
-    /******************************************************
+    /**********************************************************************
      */
 
     /**
@@ -445,8 +451,6 @@ public enum DeserializationFeature implements ConfigFeature
      * feature: only consider that if there are actual perceived problems.
      *<p>
      * Feature is enabled by default.
-     * 
-     * @since 2.1
      */
     EAGER_DESERIALIZER_FETCH(true)
     

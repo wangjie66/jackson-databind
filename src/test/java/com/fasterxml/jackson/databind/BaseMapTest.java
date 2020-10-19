@@ -1,16 +1,14 @@
 package com.fasterxml.jackson.databind;
 
 import java.io.*;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.*;
 
-import static org.junit.Assert.*;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonValue;
-import com.fasterxml.jackson.core.FormatSchema;
-import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonProcessingException;
+
+import com.fasterxml.jackson.core.*;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.deser.std.StdScalarDeserializer;
 import com.fasterxml.jackson.databind.ser.std.StdScalarSerializer;
@@ -22,9 +20,9 @@ public abstract class BaseMapTest
     private final static Object SINGLETON_OBJECT = new Object();
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Shared helper classes
-    /**********************************************************
+    /**********************************************************************
      */
 
     public static class BogusSchema implements FormatSchema {
@@ -41,10 +39,8 @@ public abstract class BaseMapTest
     protected static class BooleanWrapper {
         public Boolean b;
 
-        @JsonCreator
+        public BooleanWrapper() { }
         public BooleanWrapper(Boolean value) { b = value; }
-
-        @JsonValue public Boolean value() { return b; }
     }
 
     protected static class IntWrapper {
@@ -61,11 +57,27 @@ public abstract class BaseMapTest
         public LongWrapper(long value) { l = value; }
     }
 
+    protected static class BigIntegerWrapper {
+        public BigInteger i;
+
+        public BigIntegerWrapper() { }
+
+        public BigIntegerWrapper(final BigInteger value) { i = value; }
+    }
+
     protected static class DoubleWrapper {
         public double d;
 
         public DoubleWrapper() { }
         public DoubleWrapper(double value) { d = value; }
+    }
+
+    protected static class BigDecimalWrapper {
+        public BigDecimal d;
+
+        public BigDecimalWrapper() { }
+
+        public BigDecimalWrapper(final BigDecimal value) { d = value; }
     }
     
     /**
@@ -83,11 +95,13 @@ public abstract class BaseMapTest
 
     protected static class ObjectWrapper {
         final Object object;
-        protected ObjectWrapper(final Object object) {
+
+        public ObjectWrapper(final Object object) {
             this.object = object;
         }
         public Object getObject() { return object; }
-        @JsonCreator
+
+        @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
         static ObjectWrapper jsonValue(final Object object) {
             return new ObjectWrapper(object);
         }
@@ -109,8 +123,13 @@ public abstract class BaseMapTest
     {
         public Map<K,V> map;
 
+        public MapWrapper() { }
         public MapWrapper(Map<K,V> m) {
             map = m;
+        }
+        public MapWrapper(K key, V value) {
+            map = new LinkedHashMap<>();
+            map.put(key, value);
         }
     }
     
@@ -162,12 +181,11 @@ public abstract class BaseMapTest
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Shared serializers
-    /**********************************************************
+    /**********************************************************************
      */
 
-    @SuppressWarnings("serial")
     public static class UpperCasingSerializer extends StdScalarSerializer<String>
     {
         public UpperCasingSerializer() { super(String.class); }
@@ -179,7 +197,6 @@ public abstract class BaseMapTest
         }
     }
 
-    @SuppressWarnings("serial")
     public static class LowerCasingDeserializer extends StdScalarDeserializer<String>
     {
         public LowerCasingDeserializer() { super(String.class); }
@@ -192,39 +209,18 @@ public abstract class BaseMapTest
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Construction
-    /**********************************************************
+    /**********************************************************************
      */
     
     protected BaseMapTest() { super(); }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Factory methods
-    /**********************************************************
+    /**********************************************************************
      */
-
-    private static ObjectMapper SHARED_MAPPER;
-
-    protected ObjectMapper objectMapper() {
-        if (SHARED_MAPPER == null) {
-            SHARED_MAPPER = new ObjectMapper();
-        }
-        return SHARED_MAPPER;
-    }
-    
-    protected ObjectWriter objectWriter() {
-        return objectMapper().writer();
-    }
-
-    protected ObjectReader objectReader() {
-        return objectMapper().reader();
-    }
-    
-    protected ObjectReader objectReader(Class<?> cls) {
-        return objectMapper().readerFor(cls);
-    }
 
     // @since 2.7
     protected TypeFactory newTypeFactory() {
@@ -233,12 +229,17 @@ public abstract class BaseMapTest
     }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Additional assert methods
-    /**********************************************************
+    /**********************************************************************
      */
 
     protected void assertEquals(int[] exp, int[] act)
+    {
+        assertArrayEquals(exp, act);
+    }
+
+    protected void assertEquals(byte[] exp, byte[] act)
     {
         assertArrayEquals(exp, act);
     }
@@ -258,9 +259,9 @@ public abstract class BaseMapTest
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Helper methods, serialization
-    /**********************************************************
+    /**********************************************************************
      */
 
     @SuppressWarnings("unchecked")
@@ -270,39 +271,11 @@ public abstract class BaseMapTest
         String str = m.writeValueAsString(value);
         return (Map<String,Object>) m.readValue(str, Map.class);
     }
-    
-    protected String serializeAsString(ObjectMapper m, Object value)
-        throws IOException
-    {
-        return m.writeValueAsString(value);
-    }
-
-    protected String serializeAsString(Object value)
-        throws IOException
-    {
-        return serializeAsString(objectMapper(), value);
-    }
-
-    protected String asJSONObjectValueString(Object... args)
-        throws IOException
-    {
-        return asJSONObjectValueString(objectMapper(), args);
-    }
-
-    protected String asJSONObjectValueString(ObjectMapper m, Object... args)
-        throws IOException
-    {
-        LinkedHashMap<Object,Object> map = new LinkedHashMap<Object,Object>();
-        for (int i = 0, len = args.length; i < len; i += 2) {
-            map.put(args[i], args[i+1]);
-        }
-        return m.writeValueAsString(map);
-    }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Helper methods, deserialization
-    /**********************************************************
+    /**********************************************************************
      */
     
     protected <T> T readAndMapFromString(String input, Class<T> cls)
@@ -338,6 +311,10 @@ public abstract class BaseMapTest
         return json.replace("'", "\"");
     }
 
+    protected static String a2q(String json) {
+        return json.replace("'", "\"");
+    }
+    
     protected static String quotesToApos(String json) {
         return json.replace("\"", "'");
     }

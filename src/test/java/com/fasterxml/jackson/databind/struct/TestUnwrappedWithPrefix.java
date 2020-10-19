@@ -2,7 +2,9 @@ package com.fasterxml.jackson.databind.struct;
 
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.databind.BaseMapTest;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 
 public class TestUnwrappedWithPrefix extends BaseMapTest
 {
@@ -137,10 +139,6 @@ public class TestUnwrappedWithPrefix extends BaseMapTest
     static class SubChild {
         public String value;
     }
-    
-    // // // Reuse mapper to keep tests bit faster
-
-    private final ObjectMapper MAPPER = new ObjectMapper();
 
     /*
     /**********************************************************
@@ -148,16 +146,20 @@ public class TestUnwrappedWithPrefix extends BaseMapTest
     /**********************************************************
      */
 
+    private final ObjectMapper MAPPER = new ObjectMapper();
+
     public void testPrefixedUnwrappingSerialize() throws Exception
     {
-        assertEquals("{\"name\":\"Tatu\",\"_x\":1,\"_y\":2}",
-                MAPPER.writeValueAsString(new PrefixUnwrap("Tatu", 1, 2)));
+        JsonMapper mapper = JsonMapper.builder().enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY).build();
+        assertEquals("{\"_x\":1,\"_y\":2,\"name\":\"Tatu\"}",
+                mapper.writeValueAsString(new PrefixUnwrap("Tatu", 1, 2)));
     }
 
     public void testDeepPrefixedUnwrappingSerialize() throws Exception
     {
-        String json = MAPPER.writeValueAsString(new DeepPrefixUnwrap("Bubba", 1, 1));
-        assertEquals("{\"u.name\":\"Bubba\",\"u._x\":1,\"u._y\":1}", json);
+        JsonMapper mapper = JsonMapper.builder().enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY).build();
+        String json = mapper.writeValueAsString(new DeepPrefixUnwrap("Bubba", 1, 1));
+        assertEquals("{\"u._x\":1,\"u._y\":1,\"u.name\":\"Bubba\"}", json);
     }
 
     public void testHierarchicConfigSerialize() throws Exception
@@ -172,7 +174,7 @@ public class TestUnwrappedWithPrefix extends BaseMapTest
     /**********************************************************
      */
 
-    public void testPrefixedUnwrapping() throws Exception
+    public void testPrefixedUnwrapDeserialize() throws Exception
     {
         PrefixUnwrap bean = MAPPER.readValue("{\"name\":\"Axel\",\"_x\":4,\"_y\":7}", PrefixUnwrap.class);
         assertNotNull(bean);
@@ -182,7 +184,7 @@ public class TestUnwrappedWithPrefix extends BaseMapTest
         assertEquals(7, bean.location.y);
     }
     
-    public void testDeepPrefixedUnwrappingDeserialize() throws Exception
+    public void testDeepPrefixedUnwrapDeserialize() throws Exception
     {
         DeepPrefixUnwrap bean = MAPPER.readValue("{\"u.name\":\"Bubba\",\"u._x\":2,\"u._y\":3}",
                 DeepPrefixUnwrap.class);

@@ -1,6 +1,7 @@
 package com.fasterxml.jackson.databind.node;
 
 import java.io.IOException;
+import java.util.List;
 
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -20,11 +21,18 @@ import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
  * conversions. 
  */
 public final class MissingNode
-    extends ValueNode
+    extends BaseJsonNode // NOTE! Does NOT extend `ValueNode` unlike in 2.x
 {
+    private static final long serialVersionUID = 3L;
+
     private final static MissingNode instance = new MissingNode();
 
-    private MissingNode() { }
+    protected MissingNode() { }
+
+    // To support JDK serialization, recovery of Singleton instance
+    protected Object readResolve() {
+        return instance;
+    }
 
     // Immutable: no need to copy
     @SuppressWarnings("unchecked")
@@ -32,11 +40,15 @@ public final class MissingNode
     public <T extends JsonNode> T deepCopy() { return (T) this; }
 
     public static MissingNode getInstance() { return instance; }
-    
+
     @Override
-    public JsonNodeType getNodeType()
-    {
+    public JsonNodeType getNodeType() {
         return JsonNodeType.MISSING;
+    }
+
+    @Override
+    public final boolean isMissingNode() {
+        return true;
     }
 
     @Override public JsonToken asToken() { return JsonToken.NOT_AVAILABLE; }
@@ -61,7 +73,7 @@ public final class MissingNode
         /* Nothing to output... should we signal an error tho?
          * Chances are, this is an erroneous call. For now, let's
          * not do that; serialize as explicit null. Why? Because we
-         * can not just omit a value as JSON Object field name may have
+         * cannot just omit a value as JSON Object field name may have
          * been written out.
          */
         jg.writeNull();
@@ -74,29 +86,92 @@ public final class MissingNode
     {
         g.writeNull();
     }
-    
+
+    @SuppressWarnings("unchecked")
     @Override
-    public boolean equals(Object o)
-    {
-        /* Hmmh. Since there's just a singleton instance, this
-         * fails in all cases but with identity comparison.
-         * However: if this placeholder value was to be considered
-         * similar to SQL NULL, it shouldn't even equal itself?
-         * That might cause problems when dealing with collections
-         * like Sets... so for now, let's let identity comparison
-         * return true.
-         */
-        return (o == this);
+    public JsonNode require() {
+        return _reportRequiredViolation("require() called on `MissingNode`");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public JsonNode requireNonNull() {
+        return _reportRequiredViolation("requireNonNull() called on `MissingNode`");
     }
 
     @Override
-    public String toString() {
-        // toString() should never return null
-        return "";
+    public JsonNode get(int index) {
+        return null;
+    }
+
+    @Override
+    public JsonNode path(String fieldName) { return this; }
+
+    @Override
+    public JsonNode path(int index) { return this; }
+
+    @Override
+    protected JsonNode _at(JsonPointer ptr) {
+        return this;
+    }
+
+    @Override
+    public JsonNode findValue(String fieldName) {
+        return null;
+    }
+
+    @Override
+    public JsonNode findParent(String fieldName) {
+        return null;
+    }
+
+    @Override
+    public List<JsonNode> findValues(String fieldName, List<JsonNode> foundSoFar) {
+        return foundSoFar;
+    }
+
+    @Override
+    public List<String> findValuesAsText(String fieldName, List<String> foundSoFar) {
+        return foundSoFar;
+    }
+
+    @Override
+    public List<JsonNode> findParents(String fieldName, List<JsonNode> foundSoFar) {
+        return foundSoFar;
+    }
+
+    /*
+    /**********************************************************
+    /* Standard method overrides
+    /**********************************************************
+     */
+
+    @Override
+    public boolean equals(Object o)
+    {
+        // Hmmh. Since there's just a singleton instance, this fails in all cases
+        // but with identity comparison.
+        // However: if this placeholder value was to be considered similar to SQL NULL,
+        // it shouldn't even equal itself?
+        // That might cause problems when dealing with collections like Sets...
+        // so for now, let's let identity comparison return true.
+        return (o == this);
     }
 
     @Override
     public int hashCode() {
         return JsonNodeType.MISSING.ordinal();
+    }
+
+    // 10-Dec-2019, tatu: Bit tricky case, see [databind#2566], but seems
+    //    best NOT to produce legit JSON.
+    @Override
+    public String toString() {
+        return "";
+    }
+
+    @Override
+    public String toPrettyString() {
+        return "";
     }
 }

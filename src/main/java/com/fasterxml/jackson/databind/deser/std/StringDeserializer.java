@@ -3,31 +3,36 @@ package com.fasterxml.jackson.databind.deser.std;
 import java.io.IOException;
 
 import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
 import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.type.LogicalType;
 
 @JacksonStdImpl
-public final class StringDeserializer extends StdScalarDeserializer<String>
+public class StringDeserializer extends StdScalarDeserializer<String> // non-final since 2.9
 {
-    private static final long serialVersionUID = 1L;
-
-    // @since 2.8.8
-    protected final static int FEATURES_ACCEPT_ARRAYS =
-            DeserializationFeature.UNWRAP_SINGLE_VALUE_ARRAYS.getMask() |
-            DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT.getMask();
-    
-    /**
-     * @since 2.2
-     */
     public final static StringDeserializer instance = new StringDeserializer();
-    
+
     public StringDeserializer() { super(String.class); }
 
-    // since 2.6, slightly faster lookups for this very common type
+    @Override
+    public LogicalType logicalType() {
+        return LogicalType.Textual;
+    }
+
     @Override
     public boolean isCachable() { return true; }
+
+    @Override
+    public Object getEmptyValue(DeserializationContext ctxt) throws JsonMappingException {
+        return "";
+    }
+
+    // Since default `getNullValue()` would just call `getEmptyValue()`, need to override
+    @Override
+    public Object getNullValue(DeserializationContext ctxt) throws JsonMappingException {
+        return null;
+    }
 
     @Override
     public String deserialize(JsonParser p, DeserializationContext ctxt) throws IOException
@@ -35,7 +40,7 @@ public final class StringDeserializer extends StdScalarDeserializer<String>
         if (p.hasToken(JsonToken.VALUE_STRING)) {
             return p.getText();
         }
-        JsonToken t = p.getCurrentToken();
+        JsonToken t = p.currentToken();
         // [databind#381]
         if (t == JsonToken.START_ARRAY) {
             return _deserializeFromArray(p, ctxt);
@@ -52,42 +57,27 @@ public final class StringDeserializer extends StdScalarDeserializer<String>
             // otherwise, try conversion using toString()...
             return ob.toString();
         }
-        // allow coercions for other scalar types
-        String text = p.getValueAsString();
-        if (text != null) {
-            return text;
+        // 29-Jun-2020, tatu: New! "Scalar from Object" (mostly for XML)
+        if (t == JsonToken.START_OBJECT) {
+            return ctxt.extractScalarFromObject(p, this, _valueClass);
         }
-        return (String) ctxt.handleUnexpectedToken(_valueClass, p);
+        // allow coercions for other scalar types
+        // 17-Jan-2018, tatu: Related to [databind#1853] avoid FIELD_NAME by ensuring it's
+        //   "real" scalar
+        if (t.isScalarValue()) {
+            String text = p.getValueAsString();
+            if (text != null) {
+                return text;
+            }
+        }
+        return (String) ctxt.handleUnexpectedToken(getValueType(ctxt), p);
     }
 
     // Since we can never have type info ("natural type"; String, Boolean, Integer, Double):
     // (is it an error to even call this version?)
     @Override
-    public String deserializeWithType(JsonParser p, DeserializationContext ctxt, TypeDeserializer typeDeserializer) throws IOException {
+    public String deserializeWithType(JsonParser p, DeserializationContext ctxt,
+            TypeDeserializer typeDeserializer) throws IOException {
         return deserialize(p, ctxt);
-    }
-
-    // @since 2.8.8
-    protected String _deserializeFromArray(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        JsonToken t;
-        if (ctxt.hasSomeOfFeatures(FEATURES_ACCEPT_ARRAYS)) {
-            t = p.nextToken();
-            if (t == JsonToken.END_ARRAY) {
-                if (ctxt.isEnabled(DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT)) {
-                    return getNullValue(ctxt);
-                }
-            }
-            if (ctxt.isEnabled(DeserializationFeature.UNWRAP_SINGLE_VALUE_ARRAYS)) {
-                final String parsed = _parseString(p, ctxt);
-                if (p.nextToken() != JsonToken.END_ARRAY) {
-                    handleMissingEndArrayForSingle(p, ctxt);
-                }
-                return parsed;            
-            }
-        } else {
-            t = p.getCurrentToken();
-        }
-        return (String) ctxt.handleUnexpectedToken(_valueClass, t, p, null);
     }
 }

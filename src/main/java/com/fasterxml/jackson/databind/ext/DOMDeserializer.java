@@ -15,14 +15,12 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.deser.std.FromStringDeserializer;
 
 /**
- * Base for serializers that allows parsing DOM Documents from JSON Strings.
+ * Base for deserializers that allows parsing DOM Documents from JSON Strings.
  * Nominal type can be either {@link org.w3c.dom.Node} or
  * {@link org.w3c.dom.Document}.
  */
 public abstract class DOMDeserializer<T> extends FromStringDeserializer<T>
 {
-    private static final long serialVersionUID = 1L;
-
     private final static DocumentBuilderFactory DEFAULT_PARSER_FACTORY;
     static {
         DocumentBuilderFactory parserFactory = DocumentBuilderFactory.newInstance();
@@ -39,6 +37,14 @@ public abstract class DOMDeserializer<T> extends FromStringDeserializer<T>
             // 14-Jul-2016, tatu: Not sure how or why, but during code coverage runs
             //   (via Cobertura) we get `java.lang.AbstractMethodError` so... ignore that too
         }
+
+        // [databind#2589] add two more settings just in case
+        try {
+            parserFactory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        } catch (Throwable t) { } // as per previous one, nothing much to do
+        try {
+            parserFactory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        } catch (Throwable t) { } // as per previous one, nothing much to do
         DEFAULT_PARSER_FACTORY = parserFactory;
     }
 
@@ -72,7 +78,6 @@ public abstract class DOMDeserializer<T> extends FromStringDeserializer<T>
      */
     
     public static class NodeDeserializer extends DOMDeserializer<Node> {
-        private static final long serialVersionUID = 1L;
         public NodeDeserializer() { super(Node.class); }
         @Override
         public Node _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {
@@ -81,7 +86,6 @@ public abstract class DOMDeserializer<T> extends FromStringDeserializer<T>
     }    
 
     public static class DocumentDeserializer extends DOMDeserializer<Document> {
-        private static final long serialVersionUID = 1L;
         public DocumentDeserializer() { super(Document.class); }
         @Override
         public Document _deserialize(String value, DeserializationContext ctxt) throws IllegalArgumentException {

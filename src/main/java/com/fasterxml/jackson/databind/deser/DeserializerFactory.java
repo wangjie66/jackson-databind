@@ -1,7 +1,6 @@
 package com.fasterxml.jackson.databind.deser;
 
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
 import com.fasterxml.jackson.databind.type.*;
 
 /**
@@ -43,55 +42,10 @@ public abstract class DeserializerFactory
     protected final static Deserializers[] NO_DESERIALIZERS = new Deserializers[0];
 
     /*
-    /********************************************************
-    /* Configuration handling
-    /********************************************************
+    /**********************************************************************
+    /* Basic DeserializerFactory API
+    /**********************************************************************
      */
-
-    /**
-     * Convenience method for creating a new factory instance with additional deserializer
-     * provider.
-     */
-    public abstract DeserializerFactory withAdditionalDeserializers(Deserializers additional);
-
-    /**
-     * Convenience method for creating a new factory instance with additional
-     * {@link KeyDeserializers}.
-     */
-    public abstract DeserializerFactory withAdditionalKeyDeserializers(KeyDeserializers additional);
-    
-    /**
-     * Convenience method for creating a new factory instance with additional
-     * {@link BeanDeserializerModifier}.
-     */
-    public abstract DeserializerFactory withDeserializerModifier(BeanDeserializerModifier modifier);
-
-    /**
-     * Convenience method for creating a new factory instance with additional
-     * {@link AbstractTypeResolver}.
-     */
-    public abstract DeserializerFactory withAbstractTypeResolver(AbstractTypeResolver resolver);
-
-    /**
-     * Convenience method for creating a new factory instance with additional
-     * {@link ValueInstantiators}.
-     */
-    public abstract DeserializerFactory withValueInstantiators(ValueInstantiators instantiators);
-    
-    /*
-    /**********************************************************
-    /* Basic DeserializerFactory API:
-    /**********************************************************
-     */
-
-    /**
-     * Method that can be called to try to resolve an abstract type
-     * (interface, abstract class) into a concrete type, or at least
-     * something "more concrete" (abstract class instead of interface).
-     * Will either return passed type, or a more specific type.
-     */
-    public abstract JavaType mapAbstractType(DeserializationConfig config, JavaType type)
-        throws JsonMappingException;
 
     /**
      * Method that is to find all creators (constructors, factory methods)
@@ -131,9 +85,6 @@ public abstract class DeserializerFactory
             JavaType type, BeanDescription beanDesc)
         throws JsonMappingException;
 
-    /**
-     * @since 2.7
-     */
     public abstract JsonDeserializer<?> createReferenceDeserializer(DeserializationContext ctxt,
             ReferenceType type, BeanDescription beanDesc)
         throws JsonMappingException;
@@ -184,21 +135,53 @@ public abstract class DeserializerFactory
     public abstract KeyDeserializer createKeyDeserializer(DeserializationContext ctxt,
             JavaType type)
         throws JsonMappingException;
+
+    /**
+     * Method that can be used to check if databind module has explicitly declared deserializer
+     * for given (likely JDK) type, explicit meaning that there is specific deserializer for
+     * given type as opposed to auto-generated "Bean" deserializer. Factory itself will check
+     * for known JDK-provided types, but registered {@link com.fasterxml.jackson.databind.Module}s
+     * are also called to see if they might provide explicit deserializer.
+     *<p> 
+     * Main use for this method is with Safe Default Typing (and generally Safe Polymorphic
+     * Deserialization), during which it is good to be able to check that given raw type
+     * is explicitly supported and as such "known type" (as opposed to potentially
+     * dangerous "gadget type" which could be exploited).
+     *<p>
+     * This matches {@code Deserializers.Base.hasDeserializerFor(Class)} method, which is
+     * the mechanism used to determine if a {@code Module} might provide an explicit
+     * deserializer instead of core databind.
+     */
+    public abstract boolean hasExplicitDeserializerFor(DatabindContext ctxt,
+            Class<?> valueType);
+
+    /*
+    /**********************************************************************
+    /* Mutant factories for registering additional configuration
+    /**********************************************************************
+     */
+
+    /**
+     * Convenience method for creating a new factory instance with additional deserializer
+     * provider.
+     */
+    public abstract DeserializerFactory withAdditionalDeserializers(Deserializers additional);
+
+    /**
+     * Convenience method for creating a new factory instance with additional
+     * {@link KeyDeserializers}.
+     */
+    public abstract DeserializerFactory withAdditionalKeyDeserializers(KeyDeserializers additional);
     
     /**
-     * Method called to find and create a type information deserializer for given base type,
-     * if one is needed. If not needed (no polymorphic handling configured for type),
-     * should return null.
-     *<p>
-     * Note that this method is usually only directly called for values of container (Collection,
-     * array, Map) types and root values, but not for bean property values.
-     *
-     * @param baseType Declared base type of the value to deserializer (actual
-     *    deserializer type will be this type or its subtype)
-     * 
-     * @return Type deserializer to use for given base type, if one is needed; null if not.
+     * Convenience method for creating a new factory instance with additional
+     * {@link BeanDeserializerModifier}.
      */
-    public abstract TypeDeserializer findTypeDeserializer(DeserializationConfig config,
-            JavaType baseType)
-        throws JsonMappingException;
+    public abstract DeserializerFactory withDeserializerModifier(BeanDeserializerModifier modifier);
+
+    /**
+     * Convenience method for creating a new factory instance with additional
+     * {@link ValueInstantiators}.
+     */
+    public abstract DeserializerFactory withValueInstantiators(ValueInstantiators instantiators);
 }

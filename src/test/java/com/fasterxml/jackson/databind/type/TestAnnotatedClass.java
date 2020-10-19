@@ -2,8 +2,7 @@ package com.fasterxml.jackson.databind.type;
 
 import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.introspect.AnnotatedClass;
-import com.fasterxml.jackson.databind.introspect.AnnotatedField;
+import com.fasterxml.jackson.databind.introspect.*;
 
 /**
  * Unit test for verifying that {@link AnnotatedClass}
@@ -80,9 +79,9 @@ public class TestAnnotatedClass
     
     public void testFieldIntrospection()
     {
-        SerializationConfig config = MAPPER.getSerializationConfig();
+        SerializationConfig config = MAPPER.serializationConfig();
         JavaType t = MAPPER.constructType(FieldBean.class);
-        AnnotatedClass ac = AnnotatedClass.construct(t, config);
+        AnnotatedClass ac = AnnotatedClassResolver.resolve(config, t, config);
         // AnnotatedClass does not ignore non-visible fields, yet
         assertEquals(2, ac.getFieldCount());
         for (AnnotatedField f : ac.fields()) {
@@ -99,9 +98,29 @@ public class TestAnnotatedClass
         // Need this call to ensure there is a synthetic constructor being generated
         // (not really needed otherwise)
         Bean1005 bean = new Bean1005(13);
-        SerializationConfig config = MAPPER.getSerializationConfig();
+        SerializationConfig config = MAPPER.serializationConfig();
         JavaType t = MAPPER.constructType(bean.getClass());
-        AnnotatedClass ac = AnnotatedClass.construct(t, config);
+        AnnotatedClass ac = AnnotatedClassResolver.resolve(config, t, config);
         assertEquals(1, ac.getConstructors().size());
+    }
+
+    public void testArrayTypeIntrospection() throws Exception
+    {
+        AnnotatedClass ac = AnnotatedClassResolver.resolve(MAPPER.serializationConfig(),
+                MAPPER.constructType(int[].class), null);
+        // 09-Jun-2017, tatu: During 2.9 development, access methods were failing at
+        //    certain points so
+        assertFalse(ac.memberMethods().iterator().hasNext());
+        assertFalse(ac.fields().iterator().hasNext());
+    }
+    
+    public void testIntrospectionWithRawClass() throws Exception
+    {
+        AnnotatedClass ac = AnnotatedClassResolver.resolveWithoutSuperTypes(MAPPER.serializationConfig(),
+                String.class, null);
+        // 09-Jun-2017, tatu: During 2.9 development, access methods were failing at
+        //    certain points so
+        assertFalse(ac.memberMethods().iterator().hasNext());
+        assertFalse(ac.fields().iterator().hasNext());
     }
 }

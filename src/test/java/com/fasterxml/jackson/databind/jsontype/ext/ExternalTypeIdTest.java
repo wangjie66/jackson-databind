@@ -8,7 +8,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo.As;
 import com.fasterxml.jackson.annotation.JsonTypeInfo.Id;
 import com.fasterxml.jackson.databind.BaseMapTest;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.testutil.NoCheckSubTypeValidator;
 
 // Tests for External type id, one that exists at same level as typed Object,
 // that is, property is not within typed object but a member of its parent.
@@ -147,7 +150,7 @@ public class ExternalTypeIdTest extends BaseMapTest
         protected BaseContainer() { throw new IllegalStateException("wrong constructor called"); }
 
         @JsonCreator
-        public BaseContainer(@JsonProperty("baseContainerProperty") String bcp, @JsonProperty("base") Base b) {
+        BaseContainer(@JsonProperty("baseContainerProperty") String bcp, @JsonProperty("base") Base b) {
             baseContainerProperty = bcp;
             base = b;
         }
@@ -291,13 +294,14 @@ public class ExternalTypeIdTest extends BaseMapTest
     
     public void testSimpleSerialization() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerSubtypes(ValueBean.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .registerSubtypes(ValueBean.class)
+                .build();
         // This may look odd, but one implementation nastiness is the fact
-        // that we can not properly serialize type id before the object,
+        // that we cannot properly serialize type id before the object,
         // because call is made after property name (for object) has already
         // been written out. So we'll write it after...
-        // Deserializer will work either way as it can not rely on ordering
+        // Deserializer will work either way as it cannot rely on ordering
         // anyway.
         assertEquals("{\"bean\":{\"value\":11},\"extType\":\"vbean\"}",
                 mapper.writeValueAsString(new ExternalBean(11)));
@@ -314,8 +318,9 @@ public class ExternalTypeIdTest extends BaseMapTest
     // for [databind#942]
     public void testExternalTypeIdWithNull() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerSubtypes(ValueBean.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .registerSubtypes(ValueBean.class)
+                .build();
         ExternalBean b;
         b = mapper.readValue(aposToQuotes("{'bean':null,'extType':'vbean'}"),
                 ExternalBean.class);
@@ -333,8 +338,9 @@ public class ExternalTypeIdTest extends BaseMapTest
     
     public void testSimpleDeserialization() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerSubtypes(ValueBean.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .registerSubtypes(ValueBean.class)
+                .build();
         ExternalBean result = mapper.readValue("{\"bean\":{\"value\":11},\"extType\":\"vbean\"}", ExternalBean.class);
         assertNotNull(result);
         assertNotNull(result.bean);
@@ -353,8 +359,9 @@ public class ExternalTypeIdTest extends BaseMapTest
     // externally typed things, mixed with other stuff...
     public void testMultipleTypeIdsDeserialization() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerSubtypes(ValueBean.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .registerSubtypes(ValueBean.class)
+                .build();
         String json = mapper.writeValueAsString(new ExternalBean3(3));
         ExternalBean3 result = mapper.readValue(json, ExternalBean3.class);
         assertNotNull(result);
@@ -370,8 +377,9 @@ public class ExternalTypeIdTest extends BaseMapTest
     // Also, it should be ok to use @JsonCreator as well...
     public void testExternalTypeWithCreator() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerSubtypes(ValueBean.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .registerSubtypes(ValueBean.class)
+                .build();
         String json = mapper.writeValueAsString(new ExternalBeanWithCreator(7));
         ExternalBeanWithCreator result = mapper.readValue(json, ExternalBeanWithCreator.class);
         assertNotNull(result);
@@ -399,7 +407,7 @@ public class ExternalTypeIdTest extends BaseMapTest
         Base base = new Derived1("derived1 prop val", "base prop val");
         BaseContainer baseContainer = new BaseContainer("bc prop val", base);
         String generatedJson = MAPPER.writeValueAsString(baseContainer);
-        BaseContainer baseContainer2 = MAPPER.readValue(generatedJson,BaseContainer.class);
+        BaseContainer baseContainer2 = MAPPER.readValue(generatedJson, BaseContainer.class);
         assertEquals("bc prop val", baseContainer.getBaseContainerProperty());
 
         Base b = baseContainer2.getBase();
@@ -486,10 +494,10 @@ public class ExternalTypeIdTest extends BaseMapTest
     // for [databind#222]
     public void testExternalTypeWithProp222() throws Exception
     {
-        final ObjectMapper mapper = new ObjectMapper();
+        JsonMapper mapper = JsonMapper.builder().enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY).build();
         Issue222Bean input = new Issue222Bean(13);
         String json = mapper.writeValueAsString(input);
-        assertEquals("{\"value\":{\"x\":13},\"type\":\"foo\"}", json);
+        assertEquals("{\"type\":\"foo\",\"value\":{\"x\":13}}", json);
     }
 
     // [databind#928]
@@ -497,8 +505,10 @@ public class ExternalTypeIdTest extends BaseMapTest
     {
         final String CLASS = Payload928.class.getName();
 
-        ObjectMapper mapper = new ObjectMapper();
-
+        final ObjectMapper mapper = jsonMapperBuilder()
+                .polymorphicTypeValidator(new NoCheckSubTypeValidator())
+                .build();
+        
         final String successCase = "{\"payload\":{\"something\":\"test\"},\"class\":\""+CLASS+"\"}";
         Envelope928 envelope1 = mapper.readValue(successCase, Envelope928.class);
         assertNotNull(envelope1);
@@ -514,7 +524,6 @@ public class ExternalTypeIdTest extends BaseMapTest
     // for [databind#965]
     public void testBigDecimal965() throws Exception
     {
-
         Wrapper965 w = new Wrapper965();
         w.typeEnum = Type965.BIG_DECIMAL;
         final String NUM_STR = "-10000000000.0000000001";

@@ -20,22 +20,14 @@ import com.fasterxml.jackson.databind.util.TokenBuffer;
  */
 public class AsPropertyTypeDeserializer extends AsArrayTypeDeserializer
 {
-    private static final long serialVersionUID = 1L;
-
     protected final As _inclusion;
 
-    /**
-     * @since 2.8
-     */
     public AsPropertyTypeDeserializer(JavaType bt, TypeIdResolver idRes,
             String typePropertyName, boolean typeIdVisible, JavaType defaultImpl)
     {
         this(bt, idRes, typePropertyName, typeIdVisible, defaultImpl, As.PROPERTY);
     }
-    
-    /**
-     * @since 2.8
-     */
+
     public AsPropertyTypeDeserializer(JavaType bt, TypeIdResolver idRes,
             String typePropertyName, boolean typeIdVisible, JavaType defaultImpl,
             As inclusion)
@@ -63,6 +55,7 @@ public class AsPropertyTypeDeserializer extends AsArrayTypeDeserializer
      */
     @Override
     @SuppressWarnings("resource")
+    
     public Object deserializeTypedFromObject(JsonParser p, DeserializationContext ctxt) throws IOException
     {
         // 02-Aug-2013, tatu: May need to use native type ids
@@ -74,7 +67,7 @@ public class AsPropertyTypeDeserializer extends AsArrayTypeDeserializer
         }
         
         // but first, sanity check to ensure we have START_OBJECT or FIELD_NAME
-        JsonToken t = p.getCurrentToken();
+        JsonToken t = p.currentToken();
         if (t == JsonToken.START_OBJECT) {
             t = p.nextToken();
         } else if (/*t == JsonToken.START_ARRAY ||*/ t != JsonToken.FIELD_NAME) {
@@ -89,11 +82,13 @@ public class AsPropertyTypeDeserializer extends AsArrayTypeDeserializer
         }
         // Ok, let's try to find the property. But first, need token buffer...
         TokenBuffer tb = null;
+        final boolean ignoreCase = ctxt.isEnabled(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
 
         for (; t == JsonToken.FIELD_NAME; t = p.nextToken()) {
-            String name = p.getCurrentName();
+            final String name = p.currentName();
             p.nextToken(); // to point to the value
-            if (name.equals(_typePropertyName)) { // gotcha!
+            if (name.equals(_typePropertyName)
+                    || (ignoreCase && name.equalsIgnoreCase(_typePropertyName))) { // gotcha!
                 return _deserializeTypedForId(p, ctxt, tb);
             }
             if (tb == null) {
@@ -106,22 +101,23 @@ public class AsPropertyTypeDeserializer extends AsArrayTypeDeserializer
     }
 
     @SuppressWarnings("resource")
-    protected Object _deserializeTypedForId(JsonParser p, DeserializationContext ctxt, TokenBuffer tb) throws IOException
+    protected Object _deserializeTypedForId(JsonParser p, DeserializationContext ctxt,
+            TokenBuffer tb) throws IOException
     {
         String typeId = p.getText();
         JsonDeserializer<Object> deser = _findDeserializer(ctxt, typeId);
         if (_typeIdVisible) { // need to merge id back in JSON input?
             if (tb == null) {
-                tb = new TokenBuffer(p, ctxt);
+                tb = TokenBuffer.forInputBuffering(p, ctxt);
             }
-            tb.writeFieldName(p.getCurrentName());
+            tb.writeFieldName(p.currentName());
             tb.writeString(typeId);
         }
         if (tb != null) { // need to put back skipped properties?
             // 02-Jul-2016, tatu: Depending on for JsonParserSequence is initialized it may
             //   try to access current token; ensure there isn't one
             p.clearCurrentToken();
-            p = JsonParserSequence.createFlattened(false, tb.asParser(p), p);
+            p = JsonParserSequence.createFlattened(false, tb.asParser(ctxt, p), p);
         }
         // Must point to the next value; tb had no current, jp pointed to VALUE_STRING:
         p.nextToken(); // to skip past String value
@@ -131,40 +127,50 @@ public class AsPropertyTypeDeserializer extends AsArrayTypeDeserializer
     
     // off-lined to keep main method lean and mean...
     @SuppressWarnings("resource")
-    protected Object _deserializeTypedUsingDefaultImpl(JsonParser p, DeserializationContext ctxt,
-            TokenBuffer tb) throws IOException
+    protected Object _deserializeTypedUsingDefaultImpl(JsonParser p,
+            DeserializationContext ctxt, TokenBuffer tb) throws IOException
     {
-        // As per [JACKSON-614], may have default implementation to use
+        // May have default implementation to use
         JsonDeserializer<Object> deser = _findDefaultImplDeserializer(ctxt);
-        if (deser != null) {
-            if (tb != null) {
-                tb.writeEndObject();
-                p = tb.asParser(p);
-                // must move to point to the first token:
-                p.nextToken();
+        if (deser == null) {
+            // or, perhaps we just bumped into a "natural" value (boolean/int/double/String)?
+            Object result = TypeDeserializer.deserializeIfNatural(p, ctxt, _baseType);
+            if (result != null) {
+                return result;
             }
-            return deser.deserialize(p, ctxt);
-        }
-        // or, perhaps we just bumped into a "natural" value (boolean/int/double/String)?
-        Object result = TypeDeserializer.deserializeIfNatural(p, ctxt, _baseType);
-        if (result != null) {
-            return result;
-        }
-        // or, something for which "as-property" won't work, changed into "wrapper-array" type:
-        if (p.isExpectedStartArrayToken()) {
-            return super.deserializeTypedFromAny(p, ctxt);
-        }
-        if (p.hasToken(JsonToken.VALUE_STRING)) {
-            if (ctxt.isEnabled(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT)) {
-                String str = p.getText().trim();
-                if (str.isEmpty()) {
-                    return null;
+            // or, something for which "as-property" won't work, changed into "wrapper-array" type:
+            if (p.isExpectedStartArrayToken()) {
+                return super.deserializeTypedFromAny(p, ctxt);
+            }
+            if (p.hasToken(JsonToken.VALUE_STRING)) {
+                if (ctxt.isEnabled(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT)) {
+                    String str = p.getText().trim();
+                    if (str.isEmpty()) {
+                        return null;
+                    }
                 }
             }
+            String msg = String.format("missing type id property '%s'",
+                    _typePropertyName);
+            // even better, may know POJO property polymorphic value would be assigned to
+            if (_property != null) {
+                msg = String.format("%s (for POJO property '%s')", msg, _property.getName());
+            }
+            JavaType t = _handleMissingTypeId(ctxt, msg);
+            if (t == null) {
+                // 09-Mar-2017, tatu: Is this the right thing to do?
+                return null;
+            }
+            // ... would this actually work?
+            deser = ctxt.findContextualValueDeserializer(t, _property);
         }
-        ctxt.reportWrongTokenException(p, JsonToken.FIELD_NAME,
-                "missing property '"+_typePropertyName+"' that is to contain type id  (for class "+baseTypeName()+")");
-        return null;
+        if (tb != null) {
+            tb.writeEndObject();
+            p = tb.asParser(ctxt, p);
+            // must move to point to the first token:
+            p.nextToken();
+        }
+        return deser.deserialize(p, ctxt);
     }
 
     /* Also need to re-route "unknown" version. Need to think
@@ -176,7 +182,7 @@ public class AsPropertyTypeDeserializer extends AsArrayTypeDeserializer
         /* Sometimes, however, we get an array wrapper; specifically
          * when an array or list has been serialized with type information.
          */
-        if (p.getCurrentToken() == JsonToken.START_ARRAY) {
+        if (p.hasToken(JsonToken.START_ARRAY)) {
             return super.deserializeTypedFromArray(p, ctxt);
         }
         return deserializeTypedFromObject(p, ctxt);

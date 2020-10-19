@@ -18,7 +18,7 @@ public class TestAbstractContainers extends BaseMapTest
         @JsonSubTypes.Type(value = MapWrapper.class, name = "wrapper"),
     })
     static class MapWrapper {
-        public  IDataValueMap map = new DataValueMap();     // This does NOT work
+        public IDataValueMap map = new DataValueMap();     // This does NOT work
     }
 
     @JsonTypeInfo(use=JsonTypeInfo.Id.NAME, include=JsonTypeInfo.As.PROPERTY, property="_type_")
@@ -44,14 +44,14 @@ public class TestAbstractContainers extends BaseMapTest
     public interface IDataValueList extends List<String> { }
 
     static class DataValueList extends LinkedList<String> implements IDataValueList { }
-   
+
     /*
     /**********************************************************
     /* Test methods
     /**********************************************************
      */
 
-    private final ObjectMapper MAPPER = new ObjectMapper();
+    private final ObjectMapper MAPPER = newJsonMapper();
     
     public void testAbstractLists() throws Exception
     {

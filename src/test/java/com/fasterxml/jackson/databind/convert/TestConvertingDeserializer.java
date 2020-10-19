@@ -114,7 +114,7 @@ extends com.fasterxml.jackson.databind.BaseMapTest
         @JsonDeserialize(converter=ToNumberConverter.class)
         public Number value;
     }
-    
+
     /*
     /**********************************************************
     /* Test methods

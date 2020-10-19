@@ -7,6 +7,8 @@ import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.annotation.JsonFormat.Shape;
 
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import com.fasterxml.jackson.databind.introspect.Annotated;
 import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
 
@@ -73,7 +75,7 @@ public class TestPOJOAsArray extends BaseMapTest
         private static final long serialVersionUID = 1L;
 
         @Override
-        public JsonFormat.Value findFormat(Annotated a) {
+        public JsonFormat.Value findFormat(MapperConfig<?> config, Annotated a) {
             return new JsonFormat.Value().withShape(JsonFormat.Shape.ARRAY);
         }
     }
@@ -191,19 +193,20 @@ public class TestPOJOAsArray extends BaseMapTest
     /* Compatibility with "single-elem as array" feature
     /*****************************************************
      */
-    
-    // for [JACKSON-805]
+
     public void testSerializeAsArrayWithSingleProperty() throws Exception {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.enable(SerializationFeature.WRITE_SINGLE_ELEM_ARRAYS_UNWRAPPED);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .enable(SerializationFeature.WRITE_SINGLE_ELEM_ARRAYS_UNWRAPPED)
+                .build();
         String json = mapper.writeValueAsString(new SingleBean());
         assertEquals("\"foo\"", json);
     }
 
     public void testBeanAsArrayUnwrapped() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
+                .build();
         SingleBean result = mapper.readValue("[\"foobar\"]", SingleBean.class);
         assertNotNull(result);
         assertEquals("foobar", result.name);
@@ -221,8 +224,9 @@ public class TestPOJOAsArray extends BaseMapTest
         assertEquals("{\"value\":{\"x\":1,\"y\":2}}", MAPPER.writeValueAsString(new A()));
 
         // but override should change it:
-        ObjectMapper mapper2 = new ObjectMapper();
-        mapper2.setAnnotationIntrospector(new ForceArraysIntrospector());
+        ObjectMapper mapper2 = jsonMapperBuilder()
+                .annotationIntrospector(new ForceArraysIntrospector())
+                .build();
         assertEquals("[[1,2]]", mapper2.writeValueAsString(new A()));
 
         // and allow reading back, too
@@ -251,9 +255,10 @@ public class TestPOJOAsArray extends BaseMapTest
 
     public void testWithConfigOverrides() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.configOverride(NonAnnotatedXY.class)
-            .setFormat(JsonFormat.Value.forShape(JsonFormat.Shape.ARRAY));
+        ObjectMapper mapper = jsonMapperBuilder()
+                .withConfigOverride(NonAnnotatedXY.class,
+                        o -> o.setFormat(JsonFormat.Value.forShape(JsonFormat.Shape.ARRAY)))
+                .build();
         String json = mapper.writeValueAsString(new NonAnnotatedXY(2, 3));
         assertEquals("[2,3]", json);
 
@@ -261,5 +266,33 @@ public class TestPOJOAsArray extends BaseMapTest
         NonAnnotatedXY result = mapper.readValue(json, NonAnnotatedXY.class);
         assertNotNull(result);
         assertEquals(3, result.y);
+    }
+
+    /*
+    /*****************************************************
+    /* Failure tests
+    /*****************************************************
+     */
+
+    public void testUnknownExtraProp() throws Exception
+    {
+        String json = "{\"value\":[true,\"Foobar\",42,13, false]}";
+        try {
+            MAPPER.readValue(json, PojoAsArrayWrapper.class);
+            fail("should not pass with extra element");
+        } catch (MismatchedInputException e) {
+            verifyException(e, "Unexpected JSON values");
+        }
+
+        // but actually fine if skip-unknown set
+        PojoAsArrayWrapper v = MAPPER.readerFor(PojoAsArrayWrapper.class)
+                .without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .readValue(json);
+        assertNotNull(v);
+        // note: +1 for both so
+        assertEquals(v.value.x, 42);
+        assertEquals(v.value.y, 13);
+        assertTrue(v.value.complete);
+        assertEquals("Foobar", v.value.name);
     }
 }

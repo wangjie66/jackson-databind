@@ -4,6 +4,7 @@ import java.lang.reflect.*;
 import java.util.*;
 
 import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.util.ClassUtil;
 
 /**
  * Helper class used for resolving type parameters for given class
@@ -35,8 +36,6 @@ public class TypeBindings
 
     /**
      * Names of potentially unresolved type variables.
-     *
-     * @since 2.3
      */
     private final String[] _unboundVariables;
     
@@ -82,7 +81,7 @@ public class TypeBindings
     public static TypeBindings create(Class<?> erasedType, List<JavaType> typeList)
     {
         JavaType[] types = (typeList == null || typeList.isEmpty()) ?
-                NO_TYPES : typeList.toArray(new JavaType[typeList.size()]);
+                NO_TYPES : typeList.toArray(NO_TYPES);
         return create(erasedType, types);
     }
 
@@ -109,7 +108,7 @@ public class TypeBindings
         }
         // Check here to give better error message
         if (names.length != types.length) {
-            throw new IllegalArgumentException("Can not create TypeBindings for class "+erasedType.getName()
+            throw new IllegalArgumentException("Cannot create TypeBindings for class "+erasedType.getName()
                    +" with "+types.length+" type parameter"
                    +((types.length == 1) ? "" : "s")+": class expects "+names.length);
         }
@@ -122,7 +121,7 @@ public class TypeBindings
         TypeVariable<?>[] vars = TypeParamStash.paramsFor1(erasedType);
         int varLen = (vars == null) ? 0 : vars.length;
         if (varLen != 1) {
-            throw new IllegalArgumentException("Can not create TypeBindings for class "+erasedType.getName()
+            throw new IllegalArgumentException("Cannot create TypeBindings for class "+erasedType.getName()
                     +" with 1 type parameter: class expects "+varLen);
         }
         return new TypeBindings(new String[] { vars[0].getName() },
@@ -135,7 +134,7 @@ public class TypeBindings
         TypeVariable<?>[] vars = TypeParamStash.paramsFor2(erasedType);
         int varLen = (vars == null) ? 0 : vars.length;
         if (varLen != 2) {
-            throw new IllegalArgumentException("Can not create TypeBindings for class "+erasedType.getName()
+            throw new IllegalArgumentException("Cannot create TypeBindings for class "+erasedType.getName()
                     +" with 2 type parameters: class expects "+varLen);
         }
         return new TypeBindings(new String[] { vars[0].getName(), vars[1].getName() },
@@ -155,7 +154,7 @@ public class TypeBindings
             return EMPTY;
         }
         if (varLen != 1) {
-            throw new IllegalArgumentException("Can not create TypeBindings for class "+erasedType.getName()
+            throw new IllegalArgumentException("Cannot create TypeBindings for class "+erasedType.getName()
                     +" with 1 type parameter: class expects "+varLen);
         }
         return new TypeBindings(new String[] { vars[0].getName() },
@@ -183,7 +182,7 @@ public class TypeBindings
         }
         // Check here to give better error message
         if (names.length != types.length) {
-            throw new IllegalArgumentException("Can not create TypeBindings for class "+erasedType.getName()
+            throw new IllegalArgumentException("Cannot create TypeBindings for class "+erasedType.getName()
                    +" with "+types.length+" type parameter"
                    +((types.length == 1) ? "" : "s")+": class expects "+names.length);
         }
@@ -335,7 +334,9 @@ name, i, t.getRawClass()));
     @Override public boolean equals(Object o)
     {
         if (o == this) return true;
-        if (o == null || o.getClass() != getClass()) return false;
+        if (!ClassUtil.hasClass(o, getClass())) {
+            return false;
+        }
         TypeBindings other = (TypeBindings) o;
         int len = _types.length;
         if (len != other.size()) {

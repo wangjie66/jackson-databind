@@ -7,6 +7,7 @@ import java.util.*;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.util.ClassUtil;
 
 /**
  * Checked exception used to signal fatal problems with mapping of
@@ -85,7 +86,7 @@ public class JsonMappingException
         public Reference(Object from, String fieldName) {
             _from = from;
             if (fieldName == null) {
-                throw new NullPointerException("Can not pass null fieldName");
+                throw new NullPointerException("Cannot pass null fieldName");
             }
             _fieldName = fieldName;
         }
@@ -206,33 +207,6 @@ public class JsonMappingException
     /**********************************************************
      */
 
-    /**
-     * @deprecated Since 2.7 Use variant that takes {@link JsonParser} instead
-     */
-    @Deprecated // since 2.7
-    public JsonMappingException(String msg) { super(msg); }
-
-    /**
-     * @deprecated Since 2.7 Use variant that takes {@link JsonParser} instead
-     */
-    @Deprecated // since 2.7
-    public JsonMappingException(String msg, Throwable rootCause) { super(msg, rootCause); }
-
-    /**
-     * @deprecated Since 2.7 Use variant that takes {@link JsonParser} instead
-     */
-    @Deprecated // since 2.7
-    public JsonMappingException(String msg, JsonLocation loc) { super(msg, loc); }
-
-    /**
-     * @deprecated Since 2.7 Use variant that takes {@link JsonParser} instead
-     */
-    @Deprecated // since 2.7
-    public JsonMappingException(String msg, JsonLocation loc, Throwable rootCause) { super(msg, loc, rootCause); }
-
-    /**
-     * @since 2.7
-     */
     public JsonMappingException(Closeable processor, String msg) {
         super(msg);
         _processor = processor;
@@ -244,95 +218,70 @@ public class JsonMappingException
         }
     }
 
-    /**
-     * @since 2.7
-     */
     public JsonMappingException(Closeable processor, String msg, Throwable problem) {
         super(msg, problem);
         _processor = processor;
-        if (processor instanceof JsonParser) {
+        // 31-Jan-2020: [databind#2482] Retain original location
+        if (problem instanceof JsonProcessingException) {
+            _location = ((JsonProcessingException) problem).getLocation();
+        } else if (processor instanceof JsonParser) {
             _location = ((JsonParser) processor).getTokenLocation();
         }
     }
 
-    /**
-     * @since 2.7
-     */
     public JsonMappingException(Closeable processor, String msg, JsonLocation loc) {
         super(msg, loc);
         _processor = processor;
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(JsonParser p, String msg) {
         return new JsonMappingException(p, msg);
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(JsonParser p, String msg, Throwable problem) {
         return new JsonMappingException(p, msg, problem);
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(JsonGenerator g, String msg) {
         return new JsonMappingException(g, msg, (Throwable) null);
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(JsonGenerator g, String msg, Throwable problem) {
         return new JsonMappingException(g, msg, problem);
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(DeserializationContext ctxt, String msg) {
         return new JsonMappingException(ctxt.getParser(), msg);
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(DeserializationContext ctxt, String msg, Throwable t) {
         return new JsonMappingException(ctxt.getParser(), msg, t);
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(SerializerProvider ctxt, String msg) {
         return new JsonMappingException(ctxt.getGenerator(), msg);
     }
 
-    /**
-     * @since 2.7
-     */
     public static JsonMappingException from(SerializerProvider ctxt, String msg, Throwable problem) {
         /* 17-Aug-2015, tatu: As per [databind#903] this is bit problematic as
          *   SerializerProvider instance does not currently hold on to generator...
          */
         return new JsonMappingException(ctxt.getGenerator(), msg, problem);
     }
-    
+
     /**
      * Factory method used when "upgrading" an {@link IOException} into
      * {@link JsonMappingException}: usually only needed to comply with
      * a signature.
-     * 
-     * @since 2.1
+     *<p>
+     * NOTE: since 2.9 should usually NOT be used on input-side (deserialization)
+     *    exceptions; instead use method(s) of <code>InputMismatchException</code>
      */
     public static JsonMappingException fromUnexpectedIOE(IOException src) {
         return new JsonMappingException(null,
                 String.format("Unexpected IOException (of type %s): %s",
-                        src.getClass().getName(), src.getMessage()));
+                        src.getClass().getName(),
+                        ClassUtil.exceptionMessage(src)));
     }
 
     /**
@@ -372,7 +321,8 @@ public class JsonMappingException
         if (src instanceof JsonMappingException) {
             jme = (JsonMappingException) src;
         } else {
-            String msg = src.getMessage();
+            // [databind#2128]: try to avoid duplication
+            String msg = ClassUtil.exceptionMessage(src);
             // Let's use a more meaningful placeholder if all we have is null
             if (msg == null || msg.length() == 0) {
                 msg = "(was "+src.getClass().getName()+")";
@@ -483,9 +433,7 @@ public class JsonMappingException
 
     protected String _buildMessage()
     {
-        /* First: if we have no path info, let's just use parent's
-         * definition as is
-         */
+        // First: if we have no path info, let's just use parent's definition as is
         String msg = super.getMessage();
         if (_path == null) {
             return msg;

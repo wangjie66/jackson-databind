@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.*;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.testutil.NoCheckSubTypeValidator;
 
 import java.util.*;
 
@@ -52,14 +53,16 @@ public class TestAbstractWithObjectId extends BaseMapTest
         myList.add(two);
 
         // make an object mapper that will add class info in so deserialisation works
-        ObjectMapper om = new ObjectMapper();
-        om.enableDefaultTypingAsProperty(ObjectMapper.DefaultTyping.NON_FINAL, "@class");
+        ObjectMapper mapper = jsonMapperBuilder()
+                .activateDefaultTypingAsProperty(NoCheckSubTypeValidator.instance,
+                        DefaultTyping.NON_FINAL, "@class")
+                .build();
 
         // write and print the JSON
-        String json = om.writerWithDefaultPrettyPrinter().writeValueAsString(myList);
+        String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(myList);
         ListWrapper<BaseInterfaceImpl> result;
         
-        result = om.readValue(json, new TypeReference<ListWrapper<BaseInterfaceImpl>>() { });
+        result = mapper.readValue(json, new TypeReference<ListWrapper<BaseInterfaceImpl>>() { });
 
         assertNotNull(result);
         // see what we get back

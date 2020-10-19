@@ -1,16 +1,15 @@
 package com.fasterxml.jackson.databind.ser.std;
 
 import java.io.IOException;
-import java.lang.reflect.Type;
 
 import com.fasterxml.jackson.core.*;
 
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
 import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
 
 /**
  * This is the special serializer for regular {@link java.lang.String}s.
@@ -20,28 +19,16 @@ import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrappe
  */
 @JacksonStdImpl
 public final class StringSerializer
-// NOTE: generic parameter changed from String to Object in 2.6, to avoid
-//   use of bridge methods
-    extends NonTypedScalarSerializerBase<Object>
+    extends StdScalarSerializer<Object>
 {
-    private static final long serialVersionUID = 1L;
-
+    public final static StringSerializer instance = new StringSerializer();
+    
     public StringSerializer() { super(String.class, false); }
-
-    /**
-     * For Strings, both null and Empty String qualify for emptiness.
-     */
-    @Override
-    @Deprecated
-    public boolean isEmpty(Object value) {
-        String str = (String) value;
-        return (str == null) || (str.length() == 0);
-    }
 
     @Override
     public boolean isEmpty(SerializerProvider prov, Object value) {
         String str = (String) value;
-        return (str == null) || (str.length() == 0);
+        return str.length() == 0;
     }
 
     @Override
@@ -50,8 +37,11 @@ public final class StringSerializer
     }
 
     @Override
-    public JsonNode getSchema(SerializerProvider provider, Type typeHint) {
-        return createSchemaNode("string", true);
+    public final void serializeWithType(Object value, JsonGenerator gen, SerializerProvider provider,
+            TypeSerializer typeSer) throws IOException
+    {
+        // no type info, just regular serialization
+        gen.writeString((String) value);
     }
 
     @Override

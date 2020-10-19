@@ -11,11 +11,9 @@ import java.util.*;
  *<p>
  * Generics are not used to avoid bridge methods and since these maps
  * are not exposed as part of external API.
- *
- * @since 2.6
  */
 public final class CompactStringObjectMap
-    implements java.io.Serializable // since 2.6.2
+    implements java.io.Serializable
 {
     private static final long serialVersionUID = 1L;
 
@@ -36,7 +34,7 @@ public final class CompactStringObjectMap
         _hashArea = hashArea;
     }
 
-    public static <T> CompactStringObjectMap construct(Map<String,T> all)
+    public static CompactStringObjectMap construct(Map<String,?> all)
     {
         if (all.isEmpty()) { // can this happen?
             return EMPTY;
@@ -50,9 +48,14 @@ public final class CompactStringObjectMap
         Object[] hashArea = new Object[alloc];
         int spillCount = 0;
 
-        for (Map.Entry<String,T> entry : all.entrySet()) {
+        for (Map.Entry<String,?> entry : all.entrySet()) {
             String key = entry.getKey();
 
+            // 09-Sep-2019, tatu: [databind#2309] skip `null`s if any included
+            if (key == null) {
+                continue;
+            }
+            
             int slot = key.hashCode() & mask;
             int ix = slot+slot;
 
@@ -124,6 +127,19 @@ public final class CompactStringObjectMap
         return null;
     }
 
+    public Object findCaseInsensitive(String key) {
+        for (int i = 0, end = _hashArea.length; i < end; i += 2) {
+            Object k2 = _hashArea[i];
+            if (k2 != null) {
+                String s = (String) k2;
+                if (s.equalsIgnoreCase(key)) {
+                    return _hashArea[i+1];
+                }
+            }
+        }
+        return null;
+    }
+    
     public List<String> keys() {
         final int end = _hashArea.length;
         List<String> keys = new ArrayList<String>(end >> 2);

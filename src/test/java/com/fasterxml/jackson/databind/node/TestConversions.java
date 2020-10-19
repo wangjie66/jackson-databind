@@ -4,12 +4,12 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.*;
 
-import static org.junit.Assert.*;
-
 import org.junit.Assert;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.json.JsonFactory;
+import com.fasterxml.jackson.core.type.WritableTypeId;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
@@ -51,17 +51,17 @@ public class TestConversions extends BaseMapTest
     
     static class Issue467Serializer extends JsonSerializer<Issue467Bean> {
         @Override
-        public void serialize(Issue467Bean value, JsonGenerator jgen,
+        public void serialize(Issue467Bean value, JsonGenerator g,
                 SerializerProvider provider) throws IOException {
-            jgen.writeObject(new Issue467TmpBean(value.i));
+            g.writeObject(new Issue467TmpBean(value.i));
         }
     }    
 
     static class Issue467TreeSerializer extends JsonSerializer<Issue467Tree> {
         @Override
-        public void serialize(Issue467Tree value, JsonGenerator jgen,
+        public void serialize(Issue467Tree value, JsonGenerator g,
                 SerializerProvider provider) throws IOException {
-            jgen.writeTree(BooleanNode.TRUE);
+            g.writeTree(BooleanNode.TRUE);
         }
     }    
     
@@ -80,10 +80,36 @@ public class TestConversions extends BaseMapTest
         public Long longObj;
     }
 
+    // [databind#433]
+    static class CustomSerializedPojo implements JsonSerializable
+    {
+        private final ObjectNode node = JsonNodeFactory.instance.objectNode();
+
+        public void setFoo(final String foo) {
+            node.put("foo", foo);
+        }
+    
+        @Override
+        public void serialize(final JsonGenerator jgen, final SerializerProvider provider) throws IOException
+        {
+            jgen.writeTree(node);
+        }
+
+        @Override
+        public void serializeWithType(JsonGenerator g,
+                SerializerProvider ctxt, TypeSerializer typeSer) throws IOException
+        {
+            WritableTypeId typeIdDef = new WritableTypeId(this, JsonToken.START_OBJECT);
+            typeSer.writeTypePrefix(g, ctxt, typeIdDef);
+            serialize(g, ctxt);
+            typeSer.writeTypePrefix(g, ctxt, typeIdDef);
+        }    
+    }
+
     /*
-    /**********************************************************
-    /* Unit tests
-    /**********************************************************
+    /**********************************************************************
+    /* Test methods
+    /**********************************************************************
      */
 
     private final ObjectMapper MAPPER = objectMapper();
@@ -131,8 +157,9 @@ public class TestConversions extends BaseMapTest
     public void testTreeToValue() throws Exception
     {
         String JSON = "{\"leaf\":{\"value\":13}}";
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.addMixIn(Leaf.class, LeafMixIn.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addMixIn(Leaf.class, LeafMixIn.class)
+                .build();
         JsonNode root = mapper.readTree(JSON);
         // Ok, try converting to bean using two mechanisms
         Root r1 = mapper.treeToValue(root, Root.class);
@@ -174,10 +201,22 @@ public class TestConversions extends BaseMapTest
                 try {
                     data = n.getBinaryValue(variant);
                 } catch (Exception e) {
-                    throw new IOException("Failed (variant "+variant+", data length "+len+"): "+e.getMessage());
+                    fail("Failed (variant "+variant+", data length "+len+"): "+e.getMessage());
                 }
                 assertNotNull(data);
                 assertArrayEquals(data, input);
+
+                // 15-Aug-2018, tatu: [databind#2096] requires another test
+                JsonParser p = new TreeTraversingParser(n);
+                assertEquals(JsonToken.VALUE_STRING, p.nextToken());
+                try {
+                    data = p.getBinaryValue(variant);
+                } catch (Exception e) {
+                    fail("Failed (variant "+variant+", data length "+len+"): "+e.getMessage());
+                }
+                assertNotNull(data);
+                assertArrayEquals(data, input);
+                p.close();
             }
         }
     }
@@ -204,9 +243,9 @@ public class TestConversions extends BaseMapTest
 
     public void testEmbeddedByteArray() throws Exception
     {
-        TokenBuffer buf = new TokenBuffer(MAPPER, false);
+        TokenBuffer buf = TokenBuffer.forGeneration();
         buf.writeObject(new byte[3]);
-        JsonNode node = MAPPER.readTree(buf.asParser());
+        JsonNode node = MAPPER.readTree(buf.asParser(ObjectReadContext.empty()));
         buf.close();
         assertTrue(node.isBinary());
         byte[] data = node.binaryValue();
@@ -217,8 +256,9 @@ public class TestConversions extends BaseMapTest
     // [databind#232]
     public void testBigDecimalAsPlainStringTreeConversion() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.enable(JsonGenerator.Feature.WRITE_BIGDECIMAL_AS_PLAIN);
+        ObjectMapper mapper = new ObjectMapper(JsonFactory.builder()
+                .enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN)
+                .build());
         Map<String, Object> map = new HashMap<String, Object>();
         String PI_STR = "3.00000000";
         map.put("pi", new BigDecimal(PI_STR));
@@ -226,29 +266,6 @@ public class TestConversions extends BaseMapTest
         assertNotNull(tree);
         assertEquals(1, tree.size());
         assertTrue(tree.has("pi"));
-    }
-
-    static class CustomSerializedPojo implements JsonSerializable
-    {
-        private final ObjectNode node = JsonNodeFactory.instance.objectNode();
-
-        public void setFoo(final String foo) {
-            node.put("foo", foo);
-        }
-    
-        @Override
-        public void serialize(final JsonGenerator jgen, final SerializerProvider provider) throws IOException
-        {
-            jgen.writeTree(node);
-        }
-
-        @Override
-        public void serializeWithType(JsonGenerator jgen,
-                SerializerProvider provider, TypeSerializer typeSer) throws IOException {
-            typeSer.writeTypePrefixForObject(this, jgen);
-            serialize(jgen, provider);
-            typeSer.writeTypeSuffixForObject(this, jgen);
-        }    
     }
 
     // [databind#433]
@@ -298,5 +315,17 @@ public class TestConversions extends BaseMapTest
         JsonNode tree = MAPPER.readTree("{\"longObj\": "+EXP+".0, \"_class\": \""+LongContainer1940.class.getName()+"\"}");
         LongContainer1940 obj = MAPPER.treeToValue(tree, LongContainer1940.class);
         assertEquals(Long.valueOf(EXP), obj.longObj);
+    }
+
+    public void testConversionsOfNull()
+    {
+        // First: `null` value should become `NullNode`
+        JsonNode n = MAPPER.valueToTree(null);
+        assertNotNull(n);
+        assertTrue(n.isNull());
+
+        // and vice versa
+        Object pojo = MAPPER.treeToValue(n, Root.class);
+        assertNull(pojo);
     }
 }

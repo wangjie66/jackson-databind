@@ -1,16 +1,24 @@
 package com.fasterxml.jackson.databind;
 
+import com.fasterxml.jackson.databind.module.SimpleModule;
 import java.io.*;
 import java.util.*;
+import java.util.stream.Collectors;
+
+import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 
 import com.fasterxml.jackson.core.*;
-
+import com.fasterxml.jackson.core.json.JsonWriteFeature;
 import com.fasterxml.jackson.core.util.MinimalPrettyPrinter;
-
-import com.fasterxml.jackson.databind.deser.DefaultDeserializationContext;
+import com.fasterxml.jackson.databind.cfg.DeserializationContexts;
+import com.fasterxml.jackson.databind.deser.DeserializerCache;
 import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
+import com.fasterxml.jackson.databind.introspect.VisibilityChecker;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.*;
-import com.fasterxml.jackson.databind.type.TypeFactory;
 
 public class ObjectMapperTest extends BaseMapTest
 {
@@ -18,19 +26,12 @@ public class ObjectMapperTest extends BaseMapTest
         int value = 3;
         
         public void setX(int v) { value = v; }
+
+        protected Bean() { }
+        public Bean(int v) { value = v; }
     }
 
     static class EmptyBean { }
-    
-    // for [databind#206]
-    @SuppressWarnings("serial")
-    static class CustomMapper extends ObjectMapper {
-        @Override
-        protected DefaultDeserializationContext createDeserializationContext(JsonParser jp,
-                DeserializationConfig cfg) {
-            return super.createDeserializationContext(jp, cfg);
-        }
-    }
 
     @SuppressWarnings("serial")
     static class MyAnnotationIntrospector extends JacksonAnnotationIntrospector { }
@@ -48,43 +49,72 @@ public class ObjectMapperTest extends BaseMapTest
             g.writeRaw(" , ");
         }
     }
-    
+
+    private final JsonMapper MAPPER = new JsonMapper();
+
     /*
     /**********************************************************
-    /* Test methods
+    /* Test methods, config
     /**********************************************************
      */
-    
-    final static ObjectMapper MAPPER = new ObjectMapper();
-    
-    public void testProps()
+
+    public void testFeatureDefaults()
+    {
+        assertTrue(MAPPER.isEnabled(TokenStreamFactory.Feature.CANONICALIZE_FIELD_NAMES));
+        assertTrue(MAPPER.isEnabled(JsonWriteFeature.QUOTE_FIELD_NAMES));
+        assertTrue(MAPPER.isEnabled(StreamReadFeature.AUTO_CLOSE_SOURCE));
+        assertTrue(MAPPER.isEnabled(StreamWriteFeature.AUTO_CLOSE_TARGET));
+        assertFalse(MAPPER.isEnabled(JsonWriteFeature.ESCAPE_NON_ASCII));
+        assertTrue(MAPPER.isEnabled(JsonWriteFeature.WRITE_NAN_AS_STRINGS));
+        JsonMapper mapper = JsonMapper.builder()
+                .disable(StreamWriteFeature.FLUSH_PASSED_TO_STREAM)
+                .disable(JsonWriteFeature.WRITE_NAN_AS_STRINGS)
+                .build();
+        assertFalse(mapper.isEnabled(StreamWriteFeature.FLUSH_PASSED_TO_STREAM));
+        assertFalse(mapper.isEnabled(JsonWriteFeature.WRITE_NAN_AS_STRINGS));
+    }
+
+    /*
+    /**********************************************************
+    /* Test methods, mapper.copy()
+    /**********************************************************
+     */
+
+    // [databind#1580]
+    public void testCopyOfConfigOverrides() throws Exception
     {
         ObjectMapper m = new ObjectMapper();
+        SerializationConfig config = m.serializationConfig();
+        assertEquals(JsonSetter.Value.empty(), config.getDefaultNullHandling());
+        assertNull(config.getDefaultMergeable());
+
+        // change
+        VisibilityChecker customVis = VisibilityChecker.defaultInstance()
+                .withFieldVisibility(Visibility.ANY);
+        m = jsonMapperBuilder()
+                .changeDefaultPropertyInclusion(incl -> incl.withValueInclusion(JsonInclude.Include.NON_DEFAULT))
+                .changeDefaultVisibility(vc -> customVis)
+                .changeDefaultNullHandling(n -> n.withValueNulls(Nulls.SKIP))
+                .defaultMergeable(Boolean.TRUE)
+                .build();
+    }
+
+    /*
+    /**********************************************************
+    /* Test methods, other
+    /**********************************************************
+     */
+
+    public void testProps()
+    {
         // should have default factory
-        assertNotNull(m.getNodeFactory());
+        assertNotNull(MAPPER.getNodeFactory());
         JsonNodeFactory nf = new JsonNodeFactory(true);
-        m.setNodeFactory(nf);
+        JsonMapper m = JsonMapper.builder()
+                .nodeFactory(nf)
+                .build();
         assertNull(m.getInjectableValues());
         assertSame(nf, m.getNodeFactory());
-    }
-
-    public void testSupport()
-    {
-        assertTrue(MAPPER.canSerialize(String.class));
-        assertTrue(MAPPER.canDeserialize(TypeFactory.defaultInstance().constructType(String.class)));
-    }
-
-    public void testTreeRead() throws Exception
-    {
-        String JSON = "{ }";
-        JsonNode n = MAPPER.readTree(JSON);
-        assertTrue(n instanceof ObjectNode);
-
-        n = MAPPER.readTree(new StringReader(JSON));
-        assertTrue(n instanceof ObjectNode);
-
-        n = MAPPER.readTree(new ByteArrayInputStream(JSON.getBytes("UTF-8")));
-        assertTrue(n instanceof ObjectNode);
     }
 
     // Test to ensure that we can check property ordering defaults...
@@ -94,145 +124,78 @@ public class ObjectMapperTest extends BaseMapTest
         
         // sort-alphabetically is disabled by default:
         assertFalse(m.isEnabled(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY));
-        SerializationConfig sc = m.getSerializationConfig();
+        SerializationConfig sc = m.serializationConfig();
         assertFalse(sc.isEnabled(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY));
         assertFalse(sc.shouldSortPropertiesAlphabetically());
-        DeserializationConfig dc = m.getDeserializationConfig();
+        DeserializationConfig dc = m.deserializationConfig();
         assertFalse(dc.shouldSortPropertiesAlphabetically());
 
         // but when enabled, should be visible:
-        m.enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY);
-        sc = m.getSerializationConfig();
+        m = jsonMapperBuilder()
+                .enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
+                .build();
+        sc = m.serializationConfig();
         assertTrue(sc.isEnabled(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY));
         assertTrue(sc.shouldSortPropertiesAlphabetically());
-        dc = m.getDeserializationConfig();
+        dc = m.deserializationConfig();
         // and not just via SerializationConfig, but also via DeserializationConfig
         assertTrue(dc.isEnabled(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY));
         assertTrue(dc.shouldSortPropertiesAlphabetically());
     }
 
-
-    public void testJsonFactoryLinkage()
-    {
-        // first, implicit factory, giving implicit linkage
-        assertSame(MAPPER, MAPPER.getFactory().getCodec());
-
-        // and then explicit factory, which should also be implicitly linked
-        JsonFactory f = new JsonFactory();
-        ObjectMapper m = new ObjectMapper(f);
-        assertSame(f, m.getFactory());
-        assertSame(m, f.getCodec());
-    }
-    
-    /**
-     * Test for verifying working of [JACKSON-191]
-     */
-    public void testProviderConfig() throws Exception   
+    public void testDeserializationContextCache() throws Exception   
     {
         ObjectMapper m = new ObjectMapper();
         final String JSON = "{ \"x\" : 3 }";
 
-        assertEquals(0, m._deserializationContext._cache.cachedDeserializersCount());
+        DeserializationContexts.DefaultImpl dc = (DeserializationContexts.DefaultImpl) m._deserializationContexts;
+        DeserializerCache cache = dc.cacheForTests();
+
+        assertEquals(0, cache.cachedDeserializersCount());
         // and then should get one constructed for:
         Bean bean = m.readValue(JSON, Bean.class);
         assertNotNull(bean);
         // Since 2.6, serializer for int also cached:
-        assertEquals(2, m._deserializationContext._cache.cachedDeserializersCount());
-        m._deserializationContext._cache.flushCachedDeserializers();
-        assertEquals(0, m._deserializationContext._cache.cachedDeserializersCount());
+        assertEquals(2, cache.cachedDeserializersCount());
+        cache.flushCachedDeserializers();
+        assertEquals(0, cache.cachedDeserializersCount());
 
         // 07-Nov-2014, tatu: As per [databind#604] verify that Maps also get cached
         m = new ObjectMapper();
+        dc = (DeserializationContexts.DefaultImpl) m._deserializationContexts;
+        cache = dc.cacheForTests();
+
         List<?> stuff = m.readValue("[ ]", List.class);
         assertNotNull(stuff);
         // may look odd, but due to "Untyped" deserializer thing, we actually have
         // 4 deserializers (int, List<?>, Map<?,?>, Object)
-        assertEquals(4, m._deserializationContext._cache.cachedDeserializersCount());
-    }
-    
-    // [databind#28]: ObjectMapper.copy()
-    public void testCopy() throws Exception
-    {
-        ObjectMapper m = new ObjectMapper();
-        assertTrue(m.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
-        m.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        assertFalse(m.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
-        InjectableValues inj = new InjectableValues.Std();
-        m.setInjectableValues(inj);
-        assertFalse(m.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-        m.enable(JsonParser.Feature.ALLOW_COMMENTS);
-        assertTrue(m.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-
-        // // First: verify that handling of features is decoupled:
-        
-        ObjectMapper m2 = m.copy();
-        assertFalse(m2.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
-        m2.enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        assertTrue(m2.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
-        assertSame(inj, m2.getInjectableValues());
-
-        // but should NOT change the original
-        assertFalse(m.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES));
-
-        // nor vice versa:
-        assertFalse(m.isEnabled(DeserializationFeature.UNWRAP_ROOT_VALUE));
-        assertFalse(m2.isEnabled(DeserializationFeature.UNWRAP_ROOT_VALUE));
-        m.enable(DeserializationFeature.UNWRAP_ROOT_VALUE);
-        assertTrue(m.isEnabled(DeserializationFeature.UNWRAP_ROOT_VALUE));
-        assertFalse(m2.isEnabled(DeserializationFeature.UNWRAP_ROOT_VALUE));
-
-        // // Also, underlying JsonFactory instances should be distinct
-        
-        assertNotSame(m.getFactory(), m2.getFactory());
-
-        // [Issue#122]: Need to ensure mix-ins are not shared
-        assertEquals(0, m.getSerializationConfig().mixInCount());
-        assertEquals(0, m2.getSerializationConfig().mixInCount());
-        assertEquals(0, m.getDeserializationConfig().mixInCount());
-        assertEquals(0, m2.getDeserializationConfig().mixInCount());
-
-        m.addMixIn(String.class, Integer.class);
-        assertEquals(1, m.getSerializationConfig().mixInCount());
-        assertEquals(0, m2.getSerializationConfig().mixInCount());
-        assertEquals(1, m.getDeserializationConfig().mixInCount());
-        assertEquals(0, m2.getDeserializationConfig().mixInCount());
-
-        // [Issue#913]: Ensure JsonFactory Features copied
-        assertTrue(m2.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-        
-    }
-
-    public void testAnnotationIntrospectorCopyin() 
-    {
-        ObjectMapper m = new ObjectMapper();
-        m.setAnnotationIntrospector(new MyAnnotationIntrospector());
-        assertEquals(MyAnnotationIntrospector.class,
-                m.getDeserializationConfig().getAnnotationIntrospector().getClass());
-        ObjectMapper m2 = m.copy();
-
-        assertEquals(MyAnnotationIntrospector.class,
-                m2.getDeserializationConfig().getAnnotationIntrospector().getClass());
-        assertEquals(MyAnnotationIntrospector.class,
-                m2.getSerializationConfig().getAnnotationIntrospector().getClass());
+        assertEquals(4, cache.cachedDeserializersCount());
     }
 
     // For [databind#689]
     public void testCustomDefaultPrettyPrinter() throws Exception
     {
-        final ObjectMapper m = new ObjectMapper();
         final int[] input = new int[] { 1, 2 };
 
+        JsonMapper vanilla = new JsonMapper();
+
         // without anything else, compact:
-        assertEquals("[1,2]", m.writeValueAsString(input));
+        assertEquals("[1,2]", vanilla.writeValueAsString(input));
+        assertEquals("[1,2]", vanilla.writer().writeValueAsString(input));
 
         // or with default, get... defaults:
-        m.enable(SerializationFeature.INDENT_OUTPUT);
+        JsonMapper m = JsonMapper.builder()
+                .enable(SerializationFeature.INDENT_OUTPUT)
+                .build();
         assertEquals("[ 1, 2 ]", m.writeValueAsString(input));
-        assertEquals("[ 1, 2 ]", m.writerWithDefaultPrettyPrinter().writeValueAsString(input));
-        assertEquals("[ 1, 2 ]", m.writer().withDefaultPrettyPrinter().writeValueAsString(input));
+        assertEquals("[ 1, 2 ]", vanilla.writerWithDefaultPrettyPrinter().writeValueAsString(input));
+        assertEquals("[ 1, 2 ]", vanilla.writer().withDefaultPrettyPrinter().writeValueAsString(input));
 
         // but then with our custom thingy...
-        m.setDefaultPrettyPrinter(new FooPrettyPrinter());
+        m = JsonMapper.builder()
+                .defaultPrettyPrinter(new FooPrettyPrinter())
+                .enable(SerializationFeature.INDENT_OUTPUT)
+                .build();
         assertEquals("[1 , 2]", m.writeValueAsString(input));
         assertEquals("[1 , 2]", m.writerWithDefaultPrettyPrinter().writeValueAsString(input));
         assertEquals("[1 , 2]", m.writer().withDefaultPrettyPrinter().writeValueAsString(input));
@@ -241,84 +204,26 @@ public class ObjectMapperTest extends BaseMapTest
         assertEquals("[1,2]", m.writer().without(SerializationFeature.INDENT_OUTPUT)
                 .writeValueAsString(input));
     }
-    
-    // For [databind#703], [databind#978]
-    public void testNonSerializabilityOfObject()
-    {
-        ObjectMapper m = new ObjectMapper();
-        assertFalse(m.canSerialize(Object.class));
-        // but this used to pass, incorrectly, second time around
-        assertFalse(m.canSerialize(Object.class));
 
-        // [databind#978]: Different answer if empty Beans ARE allowed
-        m = new ObjectMapper();
-        m.disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
-        assertTrue(m.canSerialize(Object.class));
-        assertTrue(MAPPER.writer().without(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                .canSerialize(Object.class));
-        assertFalse(MAPPER.writer().with(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                .canSerialize(Object.class));
-    }
-
-    // for [databind#756]
-    public void testEmptyBeanSerializability()
-    {
-        // with default settings, error
-        assertFalse(MAPPER.writer().with(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                .canSerialize(EmptyBean.class));
-        // but with changes
-        assertTrue(MAPPER.writer().without(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                .canSerialize(EmptyBean.class));
-    }
-
-    // for [databind#898]
-    public void testSerializerProviderAccess() throws Exception
-    {
-        // ensure we have "fresh" instance, just in case
-        ObjectMapper mapper = new ObjectMapper();
-        JsonSerializer<?> ser = mapper.getSerializerProviderInstance()
-                .findValueSerializer(Bean.class);
-        assertNotNull(ser);
-        assertEquals(Bean.class, ser.handledType());
-    }
-
-    // for [databind#1074]
-    public void testCopyOfParserFeatures() throws Exception
-    {
-        // ensure we have "fresh" instance to start with
-        ObjectMapper mapper = new ObjectMapper();
-        assertFalse(mapper.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-        mapper.configure(JsonParser.Feature.ALLOW_COMMENTS, true);
-        assertTrue(mapper.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-
-        ObjectMapper copy = mapper.copy();
-        assertTrue(copy.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-
-        // also verify there's no back-linkage
-        copy.configure(JsonParser.Feature.ALLOW_COMMENTS, false);
-        assertFalse(copy.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-        assertTrue(mapper.isEnabled(JsonParser.Feature.ALLOW_COMMENTS));
-    }
-
-    // since 2.8
     public void testDataOutputViaMapper() throws Exception
     {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         ObjectNode input = MAPPER.createObjectNode();
         input.put("a", 1);
-        DataOutput data = new DataOutputStream(bytes);
         final String exp = "{\"a\":1}";
-        MAPPER.writeValue(data, input);
+        try (DataOutputStream data = new DataOutputStream(bytes)) {
+            MAPPER.writeValue((DataOutput) data, input);
+        }
         assertEquals(exp, bytes.toString("UTF-8"));
 
         // and also via ObjectWriter...
         bytes.reset();
-        data = new DataOutputStream(bytes);
-        MAPPER.writer().writeValue(data, input);
+        try (DataOutputStream data = new DataOutputStream(bytes)) {
+            MAPPER.writer().writeValue((DataOutput) data, input);
+        }
         assertEquals(exp, bytes.toString("UTF-8"));
     }
 
-    // since 2.8
     @SuppressWarnings("unchecked")
     public void testDataInputViaMapper() throws Exception
     {
@@ -337,5 +242,44 @@ public class ObjectMapperTest extends BaseMapTest
         JsonNode n = MAPPER.readerFor(Map.class)
                 .readTree(input);
         assertNotNull(n);
+    }
+
+    @SuppressWarnings("serial")
+    public void testRegisterDependentModules() {
+
+        final SimpleModule secondModule = new SimpleModule() {
+            @Override
+            public Object getRegistrationId() {
+                return "dep1";
+            }
+        };
+
+        final SimpleModule thirdModule = new SimpleModule() {
+            @Override
+            public Object getRegistrationId() {
+                return "dep2";
+            }
+        };
+
+        final SimpleModule mainModule = new SimpleModule() {
+            @Override
+            public Iterable<? extends Module> getDependencies() {
+                return Arrays.asList(secondModule, thirdModule);
+            }
+
+            @Override
+            public Object getRegistrationId() {
+                return "main";
+            }
+        };
+
+        ObjectMapper objectMapper = jsonMapperBuilder()
+                .addModule(mainModule)
+                .build();
+
+        Collection<Module> mods = objectMapper.getRegisteredModules();
+        List<Object> ids = mods.stream().map(mod -> mod.getRegistrationId())
+                .collect(Collectors.toList());
+        assertEquals(Arrays.asList("dep1", "dep2", "main"), ids);
     }
 }

@@ -1,12 +1,11 @@
 package com.fasterxml.jackson.databind.ser.std;
 
 import java.io.IOException;
-import java.lang.reflect.Type;
 
 import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.type.WritableTypeId;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
 import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
@@ -15,12 +14,11 @@ import com.fasterxml.jackson.databind.util.TokenBuffer;
 
 /**
  * We also want to directly support serialization of {@link TokenBuffer};
- * and since it is part of core package, it can not implement
+ * and since it is part of core package, it cannot implement
  * {@link com.fasterxml.jackson.databind.JsonSerializable}
  * (which is only included in the mapper package)
  */
 @JacksonStdImpl
-@SuppressWarnings("serial")
 public class TokenBufferSerializer
     extends StdSerializer<TokenBuffer>
 {
@@ -28,7 +26,7 @@ public class TokenBufferSerializer
 
     @Override
     public void serialize(TokenBuffer value, JsonGenerator jgen, SerializerProvider provider)
-            throws IOException
+        throws IOException
     {
         value.serialize(jgen);
     }
@@ -44,22 +42,17 @@ public class TokenBufferSerializer
      * than doing introspection on both serialization and deserialization.
      */
     @Override
-    public final void serializeWithType(TokenBuffer value, JsonGenerator jgen, SerializerProvider provider,
-            TypeSerializer typeSer) throws IOException
+    public final void serializeWithType(TokenBuffer value, JsonGenerator g,
+            SerializerProvider ctxt, TypeSerializer typeSer) throws IOException
     {
-        typeSer.writeTypePrefixForScalar(value, jgen);
-        serialize(value, jgen, provider);
-        typeSer.writeTypeSuffixForScalar(value, jgen);
+        // 28-Jun-2017, tatu: As per javadoc, not sure what to report as likely shape. Could
+        //    even look into first actual token inside... but, for now let's keep it simple
+        WritableTypeId typeIdDef = typeSer.writeTypePrefix(g, ctxt,
+                typeSer.typeId(value, JsonToken.VALUE_EMBEDDED_OBJECT));
+        serialize(value, g, ctxt);
+        typeSer.writeTypeSuffix(g, ctxt, typeIdDef);
     }
-    
-    @Override
-    public JsonNode getSchema(SerializerProvider provider, Type typeHint)
-    {
-        // Not 100% sure what we should say here: type is basically not known.
-        // This seems like closest approximation
-        return createSchemaNode("any", true);
-    }
-    
+
     @Override
     public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint)
         throws JsonMappingException

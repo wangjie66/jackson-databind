@@ -1,14 +1,11 @@
 package com.fasterxml.jackson.databind.deser.impl;
 
 import java.io.IOException;
-import java.util.Collection;
-import java.util.HashMap;
+import java.util.*;
 
 import com.fasterxml.jackson.core.JsonParser;
 
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
 import com.fasterxml.jackson.databind.deser.ValueInstantiator;
 
@@ -42,62 +39,115 @@ public final class PropertyBasedCreator
     protected final HashMap<String, SettableBeanProperty> _propertyLookup;
 
     /**
-     * Array that contains properties that expect value to inject, if any;
-     * null if no injectable values are expected.
+     * Array that contains properties that match creator properties
      */
-    protected final SettableBeanProperty[] _allProperties;
+    protected final SettableBeanProperty[] _propertiesInOrder;
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Construction, initialization
-    /**********************************************************
+    /**********************************************************************
      */
 
-    protected PropertyBasedCreator(ValueInstantiator valueInstantiator,
+    protected PropertyBasedCreator(DeserializationContext ctxt,
+            ValueInstantiator valueInstantiator,
             SettableBeanProperty[] creatorProps,
-            boolean caseInsensitive)
+            boolean caseInsensitive,
+            boolean addAliases)
     {
         _valueInstantiator = valueInstantiator;
         if (caseInsensitive) {
-            _propertyLookup = new CaseInsensitiveMap();
+            _propertyLookup = CaseInsensitiveMap.construct(ctxt.getConfig().getLocale());
         } else {
             _propertyLookup = new HashMap<String, SettableBeanProperty>();
         }
         final int len = creatorProps.length;
         _propertyCount = len;
-        _allProperties = new SettableBeanProperty[len];
+
+        // 26-Feb-2017, tatu: Let's start by aliases, so that there is no
+        //    possibility of accidental override of primary names
+        if (addAliases) {
+            final DeserializationConfig config = ctxt.getConfig();
+            for (SettableBeanProperty prop : creatorProps) {
+                // 22-Jan-2018, tatu: ignorable entries should be ignored, even if got aliases
+                if (!prop.isIgnorable()) {
+                    List<PropertyName> aliases = prop.findAliases(config);
+                    if (!aliases.isEmpty()) {
+                        for (PropertyName pn : aliases) {
+                            _propertyLookup.put(pn.getSimpleName(), prop);
+                        }
+                    }
+                }
+            }
+        }
+        _propertiesInOrder = new SettableBeanProperty[len];
         for (int i = 0; i < len; ++i) {
             SettableBeanProperty prop = creatorProps[i];
-            _allProperties[i] = prop;
-            _propertyLookup.put(prop.getName(), prop);
+            _propertiesInOrder[i] = prop;
+            // 22-Jan-2018, tatu: ignorable entries should be skipped
+            if (!prop.isIgnorable()) {
+                _propertyLookup.put(prop.getName(), prop);
+            }
         }
     }
 
     /**
-     * Factory method used for building actual instances: resolves deserializers
-     * and checks for "null values".
+     * Factory method used for building actual instances to be used with POJOS:
+     * resolves deserializers, checks for "null values".
      */
     public static PropertyBasedCreator construct(DeserializationContext ctxt,
-            ValueInstantiator valueInstantiator, SettableBeanProperty[] srcProps)
+            ValueInstantiator valueInstantiator, SettableBeanProperty[] srcCreatorProps,
+            BeanPropertyMap allProperties)
         throws JsonMappingException
     {
-        final int len = srcProps.length;
+        final int len = srcCreatorProps.length;
         SettableBeanProperty[] creatorProps = new SettableBeanProperty[len];
         for (int i = 0; i < len; ++i) {
-            SettableBeanProperty prop = srcProps[i];
+            SettableBeanProperty prop = srcCreatorProps[i];
+            if (!prop.hasValueDeserializer()) {
+                // 15-Apr-2020, tatu: [databind#962] Avoid getting deserializer for Inject-only
+                //     cases
+                if (!prop.isInjectionOnly()) {
+                    prop = prop.withValueDeserializer(ctxt.findContextualValueDeserializer(prop.getType(), prop));
+                }
+            }
+            creatorProps[i] = prop;
+        }
+        return new PropertyBasedCreator(ctxt, valueInstantiator, creatorProps,
+                allProperties.isCaseInsensitive(),
+// 05-Sep-2019, tatu: As per [databind#2378] looks like not all aliases get merged into
+//    `allProperties` so force lookup anyway.
+//                allProperties.hasAliases()
+                true);
+    }
+
+    /**
+     * Factory method used for building actual instances to be used with types
+     * OTHER than POJOs.
+     * resolves deserializers and checks for "null values".
+     */
+    public static PropertyBasedCreator construct(DeserializationContext ctxt,
+            ValueInstantiator valueInstantiator, SettableBeanProperty[] srcCreatorProps,
+            boolean caseInsensitive)
+        throws JsonMappingException
+    {
+        final int len = srcCreatorProps.length;
+        SettableBeanProperty[] creatorProps = new SettableBeanProperty[len];
+        for (int i = 0; i < len; ++i) {
+            SettableBeanProperty prop = srcCreatorProps[i];
             if (!prop.hasValueDeserializer()) {
                 prop = prop.withValueDeserializer(ctxt.findContextualValueDeserializer(prop.getType(), prop));
             }
             creatorProps[i] = prop;
         }
-        return new PropertyBasedCreator(valueInstantiator, creatorProps,
-                ctxt.isEnabled(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES));
+        return new PropertyBasedCreator(ctxt, valueInstantiator, creatorProps, 
+                caseInsensitive, false);
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Accessors
-    /**********************************************************
+    /**********************************************************************
      */
 
     public Collection<SettableBeanProperty> properties() {
@@ -118,15 +168,13 @@ public final class PropertyBasedCreator
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Building process
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method called when starting to build a bean instance.
-     * 
-     * @since 2.1 (added ObjectIdReader parameter -- existed in previous versions without)
      */
     public PropertyValueBuffer startBuilding(JsonParser p, DeserializationContext ctxt,
             ObjectIdReader oir) {
@@ -136,7 +184,7 @@ public final class PropertyBasedCreator
     public Object build(DeserializationContext ctxt, PropertyValueBuffer buffer) throws IOException
     {
         Object bean = _valueInstantiator.createFromObjectWith(ctxt,
-                _allProperties, buffer);
+                _propertiesInOrder, buffer);
         // returning null isn't quite legal, but let's let caller deal with that
         if (bean != null) {
             // Object Id to handle?
@@ -151,30 +199,41 @@ public final class PropertyBasedCreator
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Helper classes
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Simple override of standard {@link java.util.HashMap} to support
-     * case-insensitive access to creator properties.
-     *
-     * @since 2.8.5
+     * case-insensitive access to creator properties
      */
     static class CaseInsensitiveMap extends HashMap<String, SettableBeanProperty>
     {
-        private static final long serialVersionUID = 1L;
+        // doesn't really need to be Serializable with 3.x but... whatever
+        private static final long serialVersionUID = 3L;
 
+        /**
+         * Lower-casing can have Locale-specific minor variations.
+         */
+        protected final Locale _locale;
+
+        public CaseInsensitiveMap(Locale l) {
+            _locale = l;
+        }
+
+        public static CaseInsensitiveMap construct(Locale l) {
+            return new CaseInsensitiveMap(l);
+        }
+        
         @Override
         public SettableBeanProperty get(Object key0) {
-            String key = (String) key0;
-            return super.get(key.toLowerCase());
+            return super.get(((String) key0).toLowerCase(_locale));
         }
 
         @Override
         public SettableBeanProperty put(String key, SettableBeanProperty value) {
-            key = key.toLowerCase();
+            key = key.toLowerCase(_locale);
             return super.put(key, value);
         }
     }

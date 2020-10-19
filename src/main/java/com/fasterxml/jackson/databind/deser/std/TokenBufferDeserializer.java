@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.JsonParser;
 
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.type.LogicalType;
 import com.fasterxml.jackson.databind.util.TokenBuffer;
 
 /**
@@ -21,10 +22,14 @@ import com.fasterxml.jackson.databind.util.TokenBuffer;
  * source {@link JsonParser} supports them.
  */
 @JacksonStdImpl
-public class TokenBufferDeserializer extends StdScalarDeserializer<TokenBuffer> {
-    private static final long serialVersionUID = 1L;
-    
+public class TokenBufferDeserializer extends StdScalarDeserializer<TokenBuffer>
+{
     public TokenBufferDeserializer() { super(TokenBuffer.class); }
+
+    @Override // since 2.12
+    public LogicalType logicalType() {
+        return LogicalType.Untyped;
+    }
 
     @Override
     public TokenBuffer deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
@@ -32,6 +37,6 @@ public class TokenBufferDeserializer extends StdScalarDeserializer<TokenBuffer> 
     }
 
     protected TokenBuffer createBufferInstance(JsonParser p) {
-        return new TokenBuffer(p);
+        return new TokenBuffer(p, null);
     }
 }

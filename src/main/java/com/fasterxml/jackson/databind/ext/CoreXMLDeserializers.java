@@ -9,7 +9,6 @@ import javax.xml.namespace.QName;
 import com.fasterxml.jackson.core.*;
 
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.deser.Deserializers;
 import com.fasterxml.jackson.databind.deser.std.FromStringDeserializer;
 
 /**
@@ -17,7 +16,7 @@ import com.fasterxml.jackson.databind.deser.std.FromStringDeserializer;
  * JDK 1.5. Types are directly needed by JAXB, but may be unavailable on some
  * limited platforms; hence separate out from basic deserializer factory.
  */
-public class CoreXMLDeserializers extends Deserializers.Base
+public class CoreXMLDeserializers
 {
     /**
      * Data type factories are thread-safe after instantiation (and
@@ -33,9 +32,8 @@ public class CoreXMLDeserializers extends Deserializers.Base
         }
     }
 
-    @Override
-    public JsonDeserializer<?> findBeanDeserializer(JavaType type,
-        DeserializationConfig config, BeanDescription beanDesc)
+    public static JsonDeserializer<?> findBeanDeserializer(DeserializationConfig config,
+            JavaType type)
     {
         Class<?> raw = type.getRawClass();
         if (raw == QName.class) {
@@ -50,10 +48,17 @@ public class CoreXMLDeserializers extends Deserializers.Base
         return null;
     }
 
+    public static boolean hasDeserializerFor(Class<?> valueType) {
+        return (valueType == QName.class)
+                || (valueType == XMLGregorianCalendar.class)
+                || (valueType == Duration.class)
+                ;
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Concrete deserializers
-    /**********************************************************
+    /**********************************************************************
      */
 
     protected final static int TYPE_DURATION = 1;
@@ -65,13 +70,9 @@ public class CoreXMLDeserializers extends Deserializers.Base
      * javax.xml types {@link QName}, {@link Duration} and {@link XMLGregorianCalendar}.
      * Combined into a single class to eliminate bunch of one-off implementation
      * classes, to reduce resulting jar size (mostly).
-     *
-     * @since 2.4
      */
     public static class Std extends FromStringDeserializer<Object>
     {
-        private static final long serialVersionUID = 1L;
-
         protected final int _kind;
 
         public Std(Class<?> raw, int kind) {

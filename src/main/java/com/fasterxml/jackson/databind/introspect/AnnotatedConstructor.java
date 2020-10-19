@@ -8,22 +8,12 @@ import com.fasterxml.jackson.databind.util.ClassUtil;
 public final class AnnotatedConstructor
     extends AnnotatedWithParams
 {
-    private static final long serialVersionUID = 1L;
-
     protected final Constructor<?> _constructor;
 
-    /**
-     * Field that is used to make JDK serialization work with this
-     * object.
-     * 
-     * @since 2.1
-     */
-    protected Serialization _serialization;
-
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
      */
 
     public AnnotatedConstructor(TypeResolutionContext ctxt, Constructor<?> constructor,
@@ -36,26 +26,15 @@ public final class AnnotatedConstructor
         _constructor = constructor;
     }
 
-    /**
-     * Method used for JDK serialization support
-     * @since 2.1
-     */
-    protected AnnotatedConstructor(Serialization ser)
-    {
-        super(null, null, null);
-        _constructor = null;
-        _serialization = ser;
-    }
-    
     @Override
     public AnnotatedConstructor withAnnotations(AnnotationMap ann) {
         return new AnnotatedConstructor(_typeContext, _constructor, ann, _paramAnnotations);
     }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Annotated impl
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -78,9 +57,9 @@ public final class AnnotatedConstructor
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Extended API
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -105,15 +84,10 @@ public final class AnnotatedConstructor
     }
 
     @Override
-    @Deprecated // since 2.7
-    public Type getGenericParameterType(int index) {
-        Type[] types = _constructor.getGenericParameterTypes();
-        if (index >= types.length) {
-            return null;
-        }
-        return types[index];
+    public Parameter[] getNativeParameters() {
+        return _constructor.getParameters();
     }
-    
+
     @Override
     public final Object call() throws Exception {
         return _constructor.newInstance();
@@ -128,11 +102,11 @@ public final class AnnotatedConstructor
     public final Object call1(Object arg) throws Exception {
         return _constructor.newInstance(arg);
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* AnnotatedMember impl
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -156,11 +130,11 @@ public final class AnnotatedConstructor
         throw new UnsupportedOperationException("Cannot call getValue() on constructor of "
                 +getDeclaringClass().getName());
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Extended API, specific annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -176,50 +150,7 @@ public final class AnnotatedConstructor
     @Override
     public boolean equals(Object o) {
         if (o == this) return true;
-        if (o == null || o.getClass() != getClass()) return false;
-        return ((AnnotatedConstructor) o)._constructor == _constructor;
-    }
-    
-    /*
-    /**********************************************************
-    /* JDK serialization handling
-    /**********************************************************
-     */
-
-    Object writeReplace() {
-        return new AnnotatedConstructor(new Serialization(_constructor));
-    }
-
-    Object readResolve() {
-        Class<?> clazz = _serialization.clazz;
-        try {
-            Constructor<?> ctor = clazz.getDeclaredConstructor(_serialization.args);
-            // 06-Oct-2012, tatu: Has "lost" its security override, must force back
-            if (!ctor.isAccessible()) {
-                ClassUtil.checkAndFixAccess(ctor, false);
-            }
-            return new AnnotatedConstructor(null, ctor, null, null);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Could not find constructor with "
-                    +_serialization.args.length+" args from Class '"+clazz.getName());
-        }
-    }
-    
-    /**
-     * Helper class that is used as the workaround to persist
-     * Field references. It basically just stores declaring class
-     * and field name.
-     */
-    private final static class Serialization
-        implements java.io.Serializable
-    {
-        private static final long serialVersionUID = 1L;
-        protected Class<?> clazz;
-        protected Class<?>[] args;
-
-        public Serialization(Constructor<?> ctor) {
-            clazz = ctor.getDeclaringClass();
-            args = ctor.getParameterTypes();
-        }
+        return ClassUtil.hasClass(o, getClass())
+                && (((AnnotatedConstructor) o)._constructor == _constructor);
     }
 }

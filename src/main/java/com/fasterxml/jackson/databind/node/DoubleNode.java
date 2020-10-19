@@ -8,7 +8,6 @@ import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.core.io.NumberOutput;
 import com.fasterxml.jackson.databind.SerializerProvider;
 
-
 /**
  * Numeric node that contains 64-bit ("double precision")
  * floating point values simple 32-bit integer values.
@@ -16,12 +15,14 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 public class DoubleNode
     extends NumericNode
 {
+    private static final long serialVersionUID = 3L;
+
     protected final double _value;
 
     /* 
-    /**********************************************************
+    /**********************************************************************
     /* Construction
-    /**********************************************************
+    /**********************************************************************
      */
 
     public DoubleNode(double v) { _value = v; }
@@ -29,9 +30,9 @@ public class DoubleNode
     public static DoubleNode valueOf(double v) { return new DoubleNode(v); }
 
     /* 
-    /**********************************************************
+    /**********************************************************************
     /* BaseJsonNode extended API
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override public JsonToken asToken() { return JsonToken.VALUE_NUMBER_FLOAT; }
@@ -40,9 +41,9 @@ public class DoubleNode
     public JsonParser.NumberType numberType() { return JsonParser.NumberType.DOUBLE; }
 
     /* 
-    /**********************************************************
+    /**********************************************************************
     /* Overrridden JsonNode methods
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -74,7 +75,7 @@ public class DoubleNode
 
     @Override
     public float floatValue() { return (float) _value; }
-    
+
     @Override
     public double doubleValue() { return _value; }
 
@@ -88,14 +89,17 @@ public class DoubleNode
 
     @Override
     public String asText() {
-        return NumberOutput.toString(_value);
+        return String.valueOf(_value);
     }
 
     @Override
-    public final void serialize(JsonGenerator jg, SerializerProvider provider)
-        throws IOException, JsonProcessingException
-    {
-        jg.writeNumber(_value);
+    public boolean isNaN() {
+        return NumberOutput.notFinite(_value);
+    }
+
+    @Override
+    public final void serialize(JsonGenerator g, SerializerProvider provider) throws IOException {
+        g.writeNumber(_value);
     }
 
     @Override

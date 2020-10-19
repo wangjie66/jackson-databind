@@ -5,8 +5,8 @@ import java.util.*;
 
 import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.introspect.ClassIntrospector;
-import com.fasterxml.jackson.databind.introspect.ClassIntrospector.MixInResolver;
+import com.fasterxml.jackson.databind.introspect.MixInHandler;
+import com.fasterxml.jackson.databind.introspect.MixInResolver;
 
 public class TestMixinSerForMethods
     extends BaseMapTest
@@ -62,13 +62,6 @@ public class TestMixinSerForMethods
         @JsonIgnore
         public String takeB() { return null; }
     }
-               
-    interface ObjectMixIn
-    {
-        // and then ditto for hashCode..
-        @Override
-        @JsonProperty public int hashCode();
-    }
 
     static class EmptyBean { }
 
@@ -116,8 +109,9 @@ public class TestMixinSerForMethods
         assertEquals("b2", result.get("b"));
 
         // then with leaf-level mix-in
-        mapper = new ObjectMapper();
-        mapper.addMixIn(BaseClass.class, MixIn.class);
+        mapper = jsonMapperBuilder()
+                .addMixIn(BaseClass.class, MixIn.class)
+                .build();
         result = writeAndMap(mapper, bean);
         assertEquals(2, result.size());
         assertEquals("b2", result.get("b2"));
@@ -131,11 +125,12 @@ public class TestMixinSerForMethods
      */
     public void testIntermediateMixin() throws IOException
     {
-        ObjectMapper mapper = new ObjectMapper();
         Map<String,Object> result;
         LeafClass bean = new LeafClass("XXX", "b2");
 
-        mapper.addMixIn(BaseClass.class, MixIn.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addMixIn(BaseClass.class, MixIn.class)
+                .build();
         result = writeAndMap(mapper, bean);
         assertEquals(1, result.size());
         assertEquals("XXX", result.get("a"));
@@ -147,69 +142,52 @@ public class TestMixinSerForMethods
      */
     public void testIntermediateMixin2() throws IOException
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.addMixIn(EmptyBean.class, MixInForSimple.class);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addMixIn(EmptyBean.class, MixInForSimple.class)
+                .build();
         Map<String,Object> result = writeAndMap(mapper, new SimpleBean());
         assertEquals(1, result.size());
         assertEquals(Integer.valueOf(42), result.get("x"));
     }
 
-    /**
-     * Unit test for verifying that it is actually possible to attach
-     * mix-in annotations to basic <code>Object.class</code>. This
-     * will essentially apply to any and all Objects.
-     */
-    public void testObjectMixin() throws IOException
-    {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.addMixIn(Object.class, ObjectMixIn.class);
-
-        // First, with our bean...
-        Map<String,Object> result = writeAndMap(mapper, new BaseClass("a", "b"));
-
-        assertEquals(2, result.size());
-        assertEquals("b", result.get("b"));
-        Object ob = result.get("hashCode");
-        assertNotNull(ob);
-        assertEquals(Integer.class, ob.getClass());
-
-        /* 15-Oct-2010, tatu: Actually, we now block serialization (attempts) of plain Objects, by default
-         *    (since generally that makes no sense -- may need to revisit). As such, need to comment out
-         *    this part of test
-         */
-        /* Hmmh. For plain Object.class... I suppose getClass() does
-         * get serialized (and can't really be blocked either).
-         * Fine.
-         */
-        result = writeAndMap(mapper, new BaseClass("a", "b"));
-        assertEquals(2, result.size());
-        ob = result.get("hashCode");
-        assertNotNull(ob);
-        assertEquals(Integer.class, ob.getClass());
+    public void testSimpleMixInResolverHasMixins() {
+        MixInHandler simple = new MixInHandler(null);
+        assertFalse(simple.hasMixIns());
+        simple.addLocalDefinition(String.class, Number.class);
+        assertTrue(simple.hasMixIns());
     }
 
     // [databind#688]
     public void testCustomResolver() throws IOException
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.setMixInResolver(new ClassIntrospector.MixInResolver() {
+        final MixInResolver res = new MixInResolver() {
             @Override
             public Class<?> findMixInClassFor(Class<?> target) {
-                if (target == BaseClass.class) {
-                    return ObjectMixIn.class;
+                if (target == EmptyBean.class) {
+                    return MixInForSimple.class;
                 }
                 return null;
             }
-
+        
             @Override
-            public MixInResolver copy() {
+            public MixInResolver snapshot() {
                 return this;
             }
-        });
-        Map<String,Object> result = writeAndMap(mapper, new BaseClass("c", "d"));
-        assertEquals(2, result.size());
-        assertNotNull(result.get("hashCode"));
-        assertTrue(result.containsKey("b"));
-        assertFalse(result.containsKey("a"));
+
+            @Override
+            public boolean hasMixIns() {
+                return true;
+            }
+        };
+
+        ObjectMapper mapper = jsonMapperBuilder()
+                .mixInOverrides(res)
+                .build();
+        Map<String,Object> result = writeAndMap(mapper, new SimpleBean());
+        assertEquals(1, result.size());
+        assertEquals(Integer.valueOf(42), result.get("x"));
+
+        MixInHandler simple = new MixInHandler(res);
+        assertTrue(simple.hasMixIns());
     }
 }

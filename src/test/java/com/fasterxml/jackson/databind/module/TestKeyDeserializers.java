@@ -4,10 +4,7 @@ import java.util.Map;
 
 import com.fasterxml.jackson.core.Version;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.BaseMapTest;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.KeyDeserializer;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.*;
 
 public class TestKeyDeserializers extends BaseMapTest
 {
@@ -25,7 +22,6 @@ public class TestKeyDeserializers extends BaseMapTest
         
         public Foo(String v) { value = v; }
     }
-    
 
     /*
     /**********************************************************
@@ -35,10 +31,11 @@ public class TestKeyDeserializers extends BaseMapTest
 
     public void testKeyDeserializers() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         SimpleModule mod = new SimpleModule("test", Version.unknownVersion());
         mod.addKeyDeserializer(Foo.class, new FooKeyDeserializer());
-        mapper.registerModule(mod);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(mod)
+                .build();
         Map<Foo,Integer> map = mapper.readValue("{\"a\":3}",
                 new TypeReference<Map<Foo,Integer>>() {} );
         assertNotNull(map);

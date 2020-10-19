@@ -1,14 +1,16 @@
 package com.fasterxml.jackson.databind.node;
 
 import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.tree.ArrayTreeNode;
+import com.fasterxml.jackson.core.type.WritableTypeId;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.JsonSerializable;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
 import com.fasterxml.jackson.databind.util.RawValue;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -17,12 +19,14 @@ import java.util.List;
 
 /**
  * Node class that represents Arrays mapped from JSON content.
- *<p>
- * Note: class was <code>final</code> temporarily for Jackson 2.2.
  */
 public class ArrayNode
     extends ContainerNode<ArrayNode>
+    implements ArrayTreeNode, // since 3.0
+        java.io.Serializable // since 2.10
 {
+    private static final long serialVersionUID = 3L;
+
     private final List<JsonNode> _children;
 
     public ArrayNode(JsonNodeFactory nf) {
@@ -30,17 +34,11 @@ public class ArrayNode
         _children = new ArrayList<JsonNode>();
     }
 
-    /**
-     * @since 2.8
-     */
     public ArrayNode(JsonNodeFactory nf, int capacity) {
         super(nf);
         _children = new ArrayList<JsonNode>(capacity);
     }
 
-    /**
-     * @since 2.7
-     */
     public ArrayNode(JsonNodeFactory nf, List<JsonNode> children) {
         super(nf);
         _children = children;
@@ -86,12 +84,20 @@ public class ArrayNode
         return JsonNodeType.ARRAY;
     }
 
+    @Override
+    public boolean isArray() {
+        return true;
+    }
+
     @Override public JsonToken asToken() { return JsonToken.START_ARRAY; }
 
     @Override
     public int size() {
         return _children.size();
     }
+
+    @Override // since 2.10
+    public boolean isEmpty() { return _children.isEmpty(); }
 
     @Override
     public Iterator<JsonNode> elements() {
@@ -100,7 +106,7 @@ public class ArrayNode
 
     @Override
     public JsonNode get(int index) {
-        if (index >= 0 && index < _children.size()) {
+        if ((index >= 0) && (index < _children.size())) {
             return _children.get(index);
         }
         return null;
@@ -118,6 +124,15 @@ public class ArrayNode
             return _children.get(index);
         }
         return MissingNode.getInstance();
+    }
+
+    @Override
+    public JsonNode required(int index) {
+        if ((index >= 0) && (index < _children.size())) {
+            return _children.get(index);
+        }
+        return _reportRequiredViolation("No value at index #%d [0, %d) of `ArrayNode`",
+                index, _children.size());
     }
 
     @Override
@@ -152,28 +167,25 @@ public class ArrayNode
     {
         final List<JsonNode> c = _children;
         final int size = c.size();
-        f.writeStartArray(size);
+        f.writeStartArray(this, size);
         for (int i = 0; i < size; ++i) { // we'll typically have array list
             // For now, assuming it's either BaseJsonNode, JsonSerializable
             JsonNode n = c.get(i);
-            if (n instanceof BaseJsonNode) {
-                ((BaseJsonNode) n).serialize(f, provider);
-            } else {
-                ((JsonSerializable) n).serialize(f, provider);
-            }
+            ((BaseJsonNode) n).serialize(f, provider);
         }
         f.writeEndArray();
     }
 
     @Override
-    public void serializeWithType(JsonGenerator jg, SerializerProvider provider, TypeSerializer typeSer)
+    public void serializeWithType(JsonGenerator g, SerializerProvider ctxt, TypeSerializer typeSer)
         throws IOException
     {
-        typeSer.writeTypePrefixForArray(this, jg);
+        WritableTypeId typeIdDef = typeSer.writeTypePrefix(g, ctxt,
+                typeSer.typeId(this, JsonToken.START_ARRAY));
         for (JsonNode n : _children) {
-            ((BaseJsonNode)n).serialize(jg, provider);
+            ((BaseJsonNode)n).serialize(g, ctxt);
         }
-        typeSer.writeTypeSuffixForArray(this, jg);
+        typeSer.writeTypeSuffix(g, ctxt, typeIdDef);
     }
 
     /*
@@ -240,17 +252,42 @@ public class ArrayNode
      */
 
     /**
-     * Method that will set specified field, replacing old value,
-     * if any.
+     * Method that will set specified element, replacing old value.
      *
-     * @param value to set field to; if null, will be converted
+     * @param value to set element to; if null, will be converted
      *   to a {@link NullNode} first  (to remove field entry, call
      *   {@link #remove} instead)
      *
-     * @return Old value of the field, if any; null if there was no
-     *   old value.
+     * @return This node after adding/replacing property value (to allow chaining)
+     *
+     * @throws IndexOutOfBoundsException If Array does not have specified element
+     *  (that is, index is outside valid range of elements in array)
      */
-    public JsonNode set(int index, JsonNode value)
+    public ArrayNode set(int index, JsonNode value)
+    {
+        if (value == null) { // let's not store 'raw' nulls but nodes
+            value = nullNode();
+        }
+        if (index < 0 || index >= _children.size()) {
+            throw new IndexOutOfBoundsException("Illegal index "+ index +", array size "+size());
+        }
+        _children.set(index, value);
+        return this;
+    }
+
+    /**
+     * Method that will set specified element, replacing old value.
+     *
+     * @param value to set element to; if null, will be converted
+     *   to a {@link NullNode} first  (to remove field entry, call
+     *   {@link #remove} instead)
+     *
+     * @return Old value of the element, if any; null if no such element existed.
+     *
+     * @throws IndexOutOfBoundsException If Array does not have specified element
+     *  (that is, index is outside valid range of elements in array)
+     */
+    public JsonNode replace(int index, JsonNode value)
     {
         if (value == null) { // let's not store 'raw' nulls but nodes
             value = nullNode();
@@ -260,7 +297,7 @@ public class ArrayNode
         }
         return _children.set(index, value);
     }
-
+    
     /**
      * Method for adding specified node at the end of this array.
      *
@@ -298,14 +335,16 @@ public class ArrayNode
      */
     public ArrayNode addAll(Collection<? extends JsonNode> nodes)
     {
-        _children.addAll(nodes);
+        for (JsonNode node : nodes) {
+            add(node);
+        }
         return this;
     }
 
     /**
      * Method for inserting specified child node as an element
      * of this Array. If index is 0 or less, it will be inserted as
-     * the first element; {@code if >= size()}, appended at the end, and otherwise
+     * the first element; if {@code >= size()}, appended at the end, and otherwise
      * inserted before existing element in specified index.
      * No exceptions are thrown for any index.
      *
@@ -355,8 +394,8 @@ public class ArrayNode
      */
 
     /**
-     * Method that will construct an ArrayNode and add it as a
-     * field of this ObjectNode, replacing old value, if any.
+     * Method that will construct an ArrayNode and add it at the end
+     * of this array node.
      *
      * @return Newly constructed ArrayNode
      */
@@ -398,8 +437,6 @@ public class ArrayNode
 
     /**
      * @return This array node, to allow chaining
-     *
-     * @since 2.6
      */
     public ArrayNode addRawValue(RawValue raw) {
         if (raw == null) {
@@ -520,6 +557,18 @@ public class ArrayNode
         return _add(numberNode(v));
     }
 
+    /**
+     * Method for adding specified number at the end of this array.
+     *
+     * @return This array node, to allow chaining
+     */
+    public ArrayNode add(BigInteger v) {
+        if (v == null) {
+            return addNull();
+        }
+        return _add(numberNode(v));
+    }
+    
     /**
      * Method for adding specified String value at the end of this array.
      *
@@ -729,6 +778,21 @@ public class ArrayNode
     }
 
     /**
+     * Method that will insert specified numeric value
+     * at specified position in this array.
+     *
+     * @return This array node, to allow chaining
+     *
+     * @since 2.9
+     */
+    public ArrayNode insert(int index, BigInteger v) {
+        if (v == null) {
+            return insertNull(index);
+        }
+        return _insert(index, numberNode(v));
+    }
+    
+    /**
      * Method that will insert specified String
      * at specified position in this array.
      *
@@ -805,21 +869,6 @@ public class ArrayNode
     @Override
     public int hashCode() {
         return _children.hashCode();
-    }
-
-    @Override
-    public String toString()
-    {
-        StringBuilder sb = new StringBuilder(16 + (size() << 4));
-        sb.append('[');
-        for (int i = 0, len = _children.size(); i < len; ++i) {
-            if (i > 0) {
-                sb.append(',');
-            }
-            sb.append(_children.get(i).toString());
-        }
-        sb.append(']');
-        return sb.toString();
     }
 
     /*

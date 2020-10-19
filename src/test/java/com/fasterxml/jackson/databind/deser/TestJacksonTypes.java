@@ -13,14 +13,15 @@ import com.fasterxml.jackson.databind.util.TokenBuffer;
 public class TestJacksonTypes
     extends com.fasterxml.jackson.databind.BaseMapTest
 {
+    private final ObjectMapper MAPPER = sharedMapper();
+
     public void testJsonLocation() throws Exception
     {
-        ObjectMapper m = new ObjectMapper();
         // note: source reference is untyped, only String guaranteed to work
         JsonLocation loc = new JsonLocation("whatever",  -1, -1, 100, 13);
         // Let's use serializer here; goal is round-tripping
-        String ser = serializeAsString(m, loc);
-        JsonLocation result = m.readValue(ser, JsonLocation.class);
+        String ser = MAPPER.writeValueAsString(loc);
+        JsonLocation result = MAPPER.readValue(ser, JsonLocation.class);
         assertNotNull(result);
         assertEquals(loc.getSourceRef(), result.getSourceRef());
         assertEquals(loc.getByteOffset(), result.getByteOffset());
@@ -35,10 +36,23 @@ public class TestJacksonTypes
         JsonLocation loc = new JsonLocation(null,  -1, -1, 100, 13);
         assertTrue(loc.equals(loc));
         assertFalse(loc.equals(null));
-        assertFalse(loc.equals("abx"));
+        final Object value = "abx";
+        assertFalse(loc.equals(value));
 
         // should we check it's not 0?
         loc.hashCode();
+    }
+
+    public void testJavaType() throws Exception
+    {
+        TypeFactory tf = TypeFactory.defaultInstance();
+        // first simple type:
+        String json = MAPPER.writeValueAsString(tf.constructType(String.class));
+        assertEquals(quote(java.lang.String.class.getName()), json);
+        // and back
+        JavaType t = MAPPER.readValue(json, JavaType.class);
+        assertNotNull(t);
+        assertEquals(String.class, t.getRawClass());
     }
 
     /**
@@ -47,33 +61,31 @@ public class TestJacksonTypes
      */
     public void testTokenBufferWithSample() throws Exception
     {
-        ObjectMapper m = new ObjectMapper();
         // First, try standard sample doc:
-        TokenBuffer result = m.readValue(SAMPLE_DOC_JSON_SPEC, TokenBuffer.class);
-        verifyJsonSpecSampleDoc(result.asParser(), true);
+        TokenBuffer result = MAPPER.readValue(SAMPLE_DOC_JSON_SPEC, TokenBuffer.class);
+        verifyJsonSpecSampleDoc(result.asParser(ObjectReadContext.empty()), true);
         result.close();
     }
 
     @SuppressWarnings("resource")
     public void testTokenBufferWithSequence() throws Exception
     {
-        ObjectMapper m = new ObjectMapper();
         // and then sequence of other things
-        JsonParser jp = createParserUsingReader("[ 32, [ 1 ], \"abc\", { \"a\" : true } ]");
-        assertToken(JsonToken.START_ARRAY, jp.nextToken());
+        JsonParser p = createParserUsingReader("[ 32, [ 1 ], \"abc\", { \"a\" : true } ]");
+        assertToken(JsonToken.START_ARRAY, p.nextToken());
 
-        assertToken(JsonToken.VALUE_NUMBER_INT, jp.nextToken());
-        TokenBuffer buf = m.readValue(jp, TokenBuffer.class);
+        assertToken(JsonToken.VALUE_NUMBER_INT, p.nextToken());
+        TokenBuffer buf = MAPPER.readValue(p, TokenBuffer.class);
 
         // check manually...
-        JsonParser bufParser = buf.asParser();
+        JsonParser bufParser = buf.asParser(ObjectReadContext.empty());
         assertToken(JsonToken.VALUE_NUMBER_INT, bufParser.nextToken());
         assertEquals(32, bufParser.getIntValue());
         assertNull(bufParser.nextToken());
 
         // then bind to another
-        buf = m.readValue(jp, TokenBuffer.class);
-        bufParser = buf.asParser();
+        buf = MAPPER.readValue(p, TokenBuffer.class);
+        bufParser = buf.asParser(ObjectReadContext.empty());
         assertToken(JsonToken.START_ARRAY, bufParser.nextToken());
         assertToken(JsonToken.VALUE_NUMBER_INT, bufParser.nextToken());
         assertEquals(1, bufParser.getIntValue());
@@ -81,30 +93,57 @@ public class TestJacksonTypes
         assertNull(bufParser.nextToken());
 
         // third one, with automatic binding
-        buf = m.readValue(jp, TokenBuffer.class);
-        String str = m.readValue(buf.asParser(), String.class);
+        buf = MAPPER.readValue(p, TokenBuffer.class);
+        String str = MAPPER.readValue(buf.asParser(ObjectReadContext.empty()), String.class);
         assertEquals("abc", str);
 
         // and ditto for last one
-        buf = m.readValue(jp, TokenBuffer.class);
-        Map<?,?> map = m.readValue(buf.asParser(), Map.class);
+        buf = MAPPER.readValue(p, TokenBuffer.class);
+        Map<?,?> map = MAPPER.readValue(buf.asParser(ObjectReadContext.empty()), Map.class);
         assertEquals(1, map.size());
         assertEquals(Boolean.TRUE, map.get("a"));
         
-        assertEquals(JsonToken.END_ARRAY, jp.nextToken());
-        assertNull(jp.nextToken());
+        assertEquals(JsonToken.END_ARRAY, p.nextToken());
+        assertNull(p.nextToken());
     }
 
-    public void testJavaType() throws Exception
+    // 10k does it, 5k not, but use bit higher values just in case
+    private final static int RECURSION_2398 = 25000;
+
+    // [databind#2398]
+    public void testDeeplyNestedArrays() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         TypeFactory tf = TypeFactory.defaultInstance();
         // first simple type:
-        String json = mapper.writeValueAsString(tf.constructType(String.class));
+        String json = MAPPER.writeValueAsString(tf.constructType(String.class));
         assertEquals(quote(java.lang.String.class.getName()), json);
         // and back
-        JavaType t = mapper.readValue(json, JavaType.class);
+        JavaType t = MAPPER.readValue(json, JavaType.class);
         assertNotNull(t);
         assertEquals(String.class, t.getRawClass());
+    }
+
+    public void testDeeplyNestedObjects() throws Exception
+    {
+        try (JsonParser p = MAPPER.createParser(_createNested(RECURSION_2398,
+                "{\"a\":", "42", "}"))) {
+            p.nextToken();
+            TokenBuffer b = TokenBuffer.forGeneration();
+            b.copyCurrentStructure(p);
+            b.close();
+        }
+    }
+
+    private String _createNested(int nesting, String open, String middle, String close) 
+    {
+        StringBuilder sb = new StringBuilder(2 * nesting);
+        for (int i = 0; i < nesting; ++i) {
+            sb.append(open);
+        }
+        sb.append(middle);
+        for (int i = 0; i < nesting; ++i) {
+            sb.append(close);
+        }
+        return sb.toString();
     }
 }

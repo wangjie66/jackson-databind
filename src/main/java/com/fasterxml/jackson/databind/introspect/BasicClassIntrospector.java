@@ -1,238 +1,319 @@
 package com.fasterxml.jackson.databind.introspect;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
-import com.fasterxml.jackson.databind.AnnotationIntrospector;
-import com.fasterxml.jackson.databind.DeserializationConfig;
-import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.SerializationConfig;
+import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
-import com.fasterxml.jackson.databind.type.SimpleType;
 import com.fasterxml.jackson.databind.util.ClassUtil;
-import com.fasterxml.jackson.databind.util.LRUMap;
 
 public class BasicClassIntrospector
     extends ClassIntrospector
     implements java.io.Serializable
 {
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 3L;
+
+    private final static Class<?> CLS_OBJECT = Object.class;
+    private final static Class<?> CLS_STRING = String.class;
+    private final static Class<?> CLS_NUMBER = Number.class;
+    private final static Class<?> CLS_JSON_NODE = JsonNode.class;
 
     /* We keep a small set of pre-constructed descriptions to use for
      * common non-structured values, such as Numbers and Strings.
      * This is strictly performance optimization to reduce what is
      * usually one-time cost, but seems useful for some cases considering
      * simplicity.
-     * 
-     * @since 2.4
      */
-    
-    protected final static BasicBeanDescription STRING_DESC;
-    static {
-        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(String.class, null);
-        STRING_DESC = BasicBeanDescription.forOtherUse(null, SimpleType.constructUnsafe(String.class), ac);
-    }
-    protected final static BasicBeanDescription BOOLEAN_DESC;
-    static {
-        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Boolean.TYPE, null);
-        BOOLEAN_DESC = BasicBeanDescription.forOtherUse(null, SimpleType.constructUnsafe(Boolean.TYPE), ac);
-    }
-    protected final static BasicBeanDescription INT_DESC;
-    static {
-        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Integer.TYPE, null);
-        INT_DESC = BasicBeanDescription.forOtherUse(null, SimpleType.constructUnsafe(Integer.TYPE), ac);
-    }
-    protected final static BasicBeanDescription LONG_DESC;
-    static {
-        AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(Long.TYPE, null);
-        LONG_DESC = BasicBeanDescription.forOtherUse(null, SimpleType.constructUnsafe(Long.TYPE), ac);
-    }
+    private final static AnnotatedClass OBJECT_AC = new AnnotatedClass(CLS_OBJECT);
+    private final static AnnotatedClass STRING_AC = new AnnotatedClass(CLS_STRING);
+
+    private final static AnnotatedClass BOOLEAN_AC = new AnnotatedClass(Boolean.TYPE);
+    private final static AnnotatedClass INT_AC = new AnnotatedClass(Integer.TYPE);
+    private final static AnnotatedClass LONG_AC = new AnnotatedClass(Long.TYPE);
+
+    private final static AnnotatedClass NUMBER_AC = new AnnotatedClass(CLS_NUMBER);
 
     /*
-    /**********************************************************
-    /* Life cycle
-    /**********************************************************
+    /**********************************************************************
+    /* Configuration
+    /**********************************************************************
      */
 
-    @Deprecated // since 2.5: construct instance directly
-    public final static BasicClassIntrospector instance = new BasicClassIntrospector();
+    protected final MixInResolver _mixInResolver;
+
+    protected final MapperConfig<?> _config;
+    
+    /*
+    /**********************************************************************
+    /* State
+    /**********************************************************************
+     */
 
     /**
-     * Looks like 'forClassAnnotations()' gets called so frequently that we
-     * should consider caching to avoid some of the lookups.
-     * 
-     * @since 2.5
+     * Reuse fully-resolved annotations during a single operation
      */
-    protected final LRUMap<JavaType,BasicBeanDescription> _cachedFCA;
+    protected HashMap<JavaType, AnnotatedClass> _resolvedFullAnnotations;
+
+    // 15-Oct-2019, tatu: No measurable benefit from trying to reuse direct
+    //    annotation access.
+//    protected HashMap<JavaType, AnnotatedClass> _resolvedDirectAnnotations;
+
+    /**
+     * Reuse full bean descriptions for serialization during a single operation
+     */
+    protected HashMap<JavaType, BasicBeanDescription> _resolvedSerBeanDescs;
+
+    /**
+     * Reuse full bean descriptions for serialization during a single operation
+     */
+    protected HashMap<JavaType, BasicBeanDescription> _resolvedDeserBeanDescs;
+
+    /*
+    /**********************************************************************
+    /* Life cycle
+    /**********************************************************************
+     */
 
     public BasicClassIntrospector() {
-        // a small cache should go a long way here
-        _cachedFCA = new LRUMap<JavaType,BasicBeanDescription>(16, 64);
+        _config = null;
+        _mixInResolver = null;
     }
-    
+
+    protected BasicClassIntrospector(MapperConfig<?> config) {
+        _config = Objects.requireNonNull(config, "Can not pass null `config`");
+        _mixInResolver = config;
+    }
+
+    @Override
+    public ClassIntrospector forMapper() {
+        // 14-Oct-2019, tatu: no per-mapper caching used, so just return as-is
+        return this;
+    }
+
+    @Override
+    public ClassIntrospector forOperation(MapperConfig<?> config) {
+        return new BasicClassIntrospector(config);
+    }
     /*
-    /**********************************************************
-    /* Factory method impls
-    /**********************************************************
+    /**********************************************************************
+    /* Factory method impls: annotation resolution
+    /**********************************************************************
      */
 
     @Override
-    public BasicBeanDescription forSerialization(SerializationConfig cfg,
-            JavaType type, MixInResolver r)
+    public AnnotatedClass introspectClassAnnotations(JavaType type)
+    {
+        AnnotatedClass ac = _findStdTypeDef(type);
+        if (ac != null) {
+//System.err.println(" AC.introspectClassAnnotations "+type.getRawClass().getSimpleName()+" -> std-def");
+            return ac;
+        }
+        if (_resolvedFullAnnotations == null) {
+            _resolvedFullAnnotations = new HashMap<>();
+        } else {
+            ac = _resolvedFullAnnotations.get(type);
+            if (ac != null) {
+//System.err.println(" AC.introspectClassAnnotations "+type.getRawClass().getSimpleName()+" -> CACHED");
+                return ac;
+            }
+        }
+//System.err.println(" AC.introspectClassAnnotations "+type.getRawClass().getSimpleName()+" -> resolve");
+        ac = _resolveAnnotatedClass(type);
+        _resolvedFullAnnotations.put(type, ac);
+        return ac;
+    }
+
+    @Override
+    public AnnotatedClass introspectDirectClassAnnotations(JavaType type)
+    {
+        AnnotatedClass ac = _findStdTypeDef(type);
+        return (ac != null) ? ac : _resolveAnnotatedWithoutSuperTypes(type);
+    }
+
+    protected AnnotatedClass _resolveAnnotatedClass(JavaType type) {
+        return AnnotatedClassResolver.resolve(_config, type, _mixInResolver);
+    }
+
+    protected AnnotatedClass _resolveAnnotatedWithoutSuperTypes(JavaType type) {
+        return AnnotatedClassResolver.resolveWithoutSuperTypes(_config, type, _mixInResolver);
+    }
+    
+    /*
+    /**********************************************************************
+    /* Factory method impls: bean introspection
+    /**********************************************************************
+     */
+
+    @Override
+    public BasicBeanDescription introspectForSerialization(JavaType type)
     {
         // minor optimization: for some JDK types do minimal introspection
         BasicBeanDescription desc = _findStdTypeDesc(type);
         if (desc == null) {
-            // As per [Databind#550], skip full introspection for some of standard
+            // As per [databind#550], skip full introspection for some of standard
             // structured types as well
-            desc = _findStdJdkCollectionDesc(cfg, type);
+            desc = _findStdJdkCollectionDesc(type);
             if (desc == null) {
-                desc = BasicBeanDescription.forSerialization(collectProperties(cfg,
-                        type, r, true, "set"));
+                if (_resolvedSerBeanDescs == null) {
+                    _resolvedSerBeanDescs = new HashMap<>();
+                } else {
+                    desc = _resolvedSerBeanDescs.get(type);
+                    if (desc != null) {
+                        return desc;
+                    }
+                }
+                desc = BasicBeanDescription.forSerialization(collectProperties(type,
+                        introspectClassAnnotations(type),
+                        true, "set"));
+                _resolvedSerBeanDescs.put(type, desc);
             }
-            // Also: this is a superset of "forClassAnnotations", so may optimize by optional add:
-            _cachedFCA.putIfAbsent(type, desc);
         }
         return desc;
     }
 
     @Override
-    public BasicBeanDescription forDeserialization(DeserializationConfig cfg,
-            JavaType type, MixInResolver r)
+    public BasicBeanDescription introspectForDeserialization(JavaType type)
     {
         // minor optimization: for some JDK types do minimal introspection
         BasicBeanDescription desc = _findStdTypeDesc(type);
         if (desc == null) {
-            // As per [Databind#550], skip full introspection for some of standard
+            // As per [databind#550], skip full introspection for some of standard
             // structured types as well
-            desc = _findStdJdkCollectionDesc(cfg, type);
+            desc = _findStdJdkCollectionDesc(type);
             if (desc == null) {
-                desc = BasicBeanDescription.forDeserialization(collectProperties(cfg,
-                        		type, r, false, "set"));
+                if (_resolvedDeserBeanDescs == null) {
+                    _resolvedDeserBeanDescs = new HashMap<>();
+                } else {
+                    desc = _resolvedDeserBeanDescs.get(type);
+                    if (desc != null) {
+                        return desc;
+                    }
+                }
+                desc = BasicBeanDescription.forDeserialization(collectProperties(type,
+                        introspectClassAnnotations(type),
+                        false, "set"));
+                _resolvedDeserBeanDescs.put(type, desc);
             }
-            // Also: this is a superset of "forClassAnnotations", so may optimize by optional add:
-            _cachedFCA.putIfAbsent(type, desc);
         }
         return desc;
     }
 
     @Override
-    public BasicBeanDescription forDeserializationWithBuilder(DeserializationConfig cfg,
-            JavaType type, MixInResolver r)
+    public BasicBeanDescription introspectForDeserializationWithBuilder(JavaType type)
     {
         // no std JDK types with Builders, so:
-
-        BasicBeanDescription desc = BasicBeanDescription.forDeserialization(collectPropertiesWithBuilder(cfg,
-                type, r, false));
-        // this is still a superset of "forClassAnnotations", so may optimize by optional add:
-        _cachedFCA.putIfAbsent(type, desc);
-        return desc;
+        return BasicBeanDescription.forDeserialization(collectPropertiesWithBuilder(type,
+                introspectClassAnnotations(type),
+                false));
     }
-    
+
     @Override
-    public BasicBeanDescription forCreation(DeserializationConfig cfg,
-            JavaType type, MixInResolver r)
+    public BasicBeanDescription introspectForCreation(JavaType type)
     {
         BasicBeanDescription desc = _findStdTypeDesc(type);
         if (desc == null) {
-
-            // As per [Databind#550], skip full introspection for some of standard
+            // As per [databind#550], skip full introspection for some of standard
             // structured types as well
-            desc = _findStdJdkCollectionDesc(cfg, type);
+            desc = _findStdJdkCollectionDesc(type);
             if (desc == null) {
-                desc = BasicBeanDescription.forDeserialization(
-            		collectProperties(cfg, type, r, false, "set"));
-            }
-        }
-        // should this be cached for FCA?
-        return desc;
-    }
-
-    @Override
-    public BasicBeanDescription forClassAnnotations(MapperConfig<?> config,
-            JavaType type, MixInResolver r)
-    {
-        BasicBeanDescription desc = _findStdTypeDesc(type);
-        if (desc == null) {
-            desc = _cachedFCA.get(type);
-            if (desc == null) {
-                AnnotatedClass ac = AnnotatedClass.construct(type, config, r);
-                desc = BasicBeanDescription.forOtherUse(config, type, ac);
-                _cachedFCA.put(type, desc);
+                desc = BasicBeanDescription.forDeserialization(collectProperties(type,
+                        introspectClassAnnotations(type),
+                        false, "set"));
             }
         }
         return desc;
     }
 
-    @Override
-    public BasicBeanDescription forDirectClassAnnotations(MapperConfig<?> config,
-            JavaType type, MixInResolver r)
-    {
-        BasicBeanDescription desc = _findStdTypeDesc(type);
-        if (desc == null) {
-            AnnotatedClass ac = AnnotatedClass.constructWithoutSuperTypes(type.getRawClass(), config, r);
-            desc = BasicBeanDescription.forOtherUse(config, type, ac);
-        }
-        return desc;
-    }
-    
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Overridable helper methods
-    /**********************************************************
+    /**********************************************************************
      */
 
-    protected POJOPropertiesCollector collectProperties(MapperConfig<?> config,
-            JavaType type, MixInResolver r, boolean forSerialization,
-            String mutatorPrefix)
+    protected POJOPropertiesCollector collectProperties(JavaType type, AnnotatedClass ac,
+            boolean forSerialization, String mutatorPrefix)
     {
-        AnnotatedClass ac = AnnotatedClass.construct(type, config, r);
-        return constructPropertyCollector(config, ac, type, forSerialization, mutatorPrefix);
+        return constructPropertyCollector(type, ac, forSerialization, mutatorPrefix);
     }
-    
-    protected POJOPropertiesCollector collectPropertiesWithBuilder(MapperConfig<?> config,
-            JavaType type, MixInResolver r, boolean forSerialization)
+
+    protected POJOPropertiesCollector collectPropertiesWithBuilder(JavaType type, AnnotatedClass ac,
+            boolean forSerialization)
     {
-        boolean useAnnotations = config.isAnnotationProcessingEnabled();
-        AnnotationIntrospector ai = useAnnotations ? config.getAnnotationIntrospector() : null;
-        AnnotatedClass ac = AnnotatedClass.construct(type, config, r);
-        JsonPOJOBuilder.Value builderConfig = (ai == null) ? null : ai.findPOJOBuilderConfig(ac);
-        String mutatorPrefix = (builderConfig == null) ? "with" : builderConfig.withPrefix;
-        return constructPropertyCollector(config, ac, type, forSerialization, mutatorPrefix);
+        AnnotationIntrospector ai = _config.isAnnotationProcessingEnabled() ? _config.getAnnotationIntrospector() : null;
+        JsonPOJOBuilder.Value builderConfig = (ai == null) ? null
+                : ai.findPOJOBuilderConfig(_config, ac);
+        String mutatorPrefix = (builderConfig == null) ? JsonPOJOBuilder.DEFAULT_WITH_PREFIX : builderConfig.withPrefix;
+        return constructPropertyCollector(type, ac, forSerialization, mutatorPrefix);
     }
 
     /**
      * Overridable method called for creating {@link POJOPropertiesCollector} instance
      * to use; override is needed if a custom sub-class is to be used.
      */
-    protected POJOPropertiesCollector constructPropertyCollector(MapperConfig<?> config,
-            AnnotatedClass ac, JavaType type, boolean forSerialization, String mutatorPrefix)
+    protected POJOPropertiesCollector constructPropertyCollector(JavaType type, AnnotatedClass ac,
+            boolean forSerialization, String mutatorPrefix)
     {
-        return new POJOPropertiesCollector(config, forSerialization, type, ac, mutatorPrefix);
+        return new POJOPropertiesCollector(_config, forSerialization, type, ac, mutatorPrefix);
     }
-    
+
+    protected BasicBeanDescription _findStdTypeDesc(JavaType type) {
+        AnnotatedClass ac = _findStdTypeDef(type);
+        return (ac == null) ? null : BasicBeanDescription.forOtherUse(_config, type, ac);
+    }
+
     /**
      * Method called to see if type is one of core JDK types
      * that we have cached for efficiency.
      */
-    protected BasicBeanDescription _findStdTypeDesc(JavaType type)
+    protected AnnotatedClass _findStdTypeDef(JavaType type)
     {
-        Class<?> cls = type.getRawClass();
-        if (cls.isPrimitive()) {
-            if (cls == Boolean.TYPE) {
-                return BOOLEAN_DESC;
+        final Class<?> rawType = type.getRawClass();
+        if (rawType.isPrimitive()) {
+            if (rawType == Integer.TYPE) {
+                return INT_AC;
             }
-            if (cls == Integer.TYPE) {
-                return INT_DESC;
+            if (rawType == Long.TYPE) {
+                return LONG_AC;
             }
-            if (cls == Long.TYPE) {
-                return LONG_DESC;
+            if (rawType == Boolean.TYPE) {
+                return BOOLEAN_AC;
             }
-        } else {
-            if (cls == String.class) {
-                return STRING_DESC;
+        } else if (ClassUtil.isJDKClass(rawType)) {
+            if (rawType == CLS_STRING) {
+                return STRING_AC;
             }
+            // Should be ok to just pass "primitive" info
+            if (rawType == Integer.class) {
+                return INT_AC;
+            }
+            if (rawType == Long.class) {
+                return LONG_AC;
+            }
+            if (rawType == Boolean.class) {
+                return BOOLEAN_AC;
+            }
+
+            if (rawType == CLS_OBJECT) {
+                return OBJECT_AC;
+            }
+            // This mostly matters for "untyped" deserialization
+            if (rawType == CLS_NUMBER) {
+                return NUMBER_AC;
+            }
+        } else if (CLS_JSON_NODE.isAssignableFrom(rawType)) {
+            return new AnnotatedClass(rawType);
+        }
+        return null;
+    }
+
+    protected BasicBeanDescription _findStdJdkCollectionDesc(JavaType type)
+    {
+        if (_isStdJDKCollection(type)) {
+            return BasicBeanDescription.forOtherUse(_config, type,
+                    introspectClassAnnotations(type));
         }
         return null;
     }
@@ -242,34 +323,20 @@ public class BasicClassIntrospector
      * for members (methods, fields, constructors); we may do so for
      * a limited number of container types JDK provides.
      */
-    protected boolean _isStdJDKCollection(JavaType type)
+    private boolean _isStdJDKCollection(JavaType type)
     {
         if (!type.isContainerType() || type.isArrayType()) {
             return false;
         }
         Class<?> raw = type.getRawClass();
-        String pkgName = ClassUtil.getPackageName(raw);
-        if (pkgName != null) {
-            if (pkgName.startsWith("java.lang")
-                    || pkgName.startsWith("java.util")) {
-                /* 23-Sep-2014, tatu: Should we be conservative here (minimal number
-                 *    of matches), or ambitious? Let's do latter for now.
-                 */
-                if (Collection.class.isAssignableFrom(raw)
-                        || Map.class.isAssignableFrom(raw)) {
-                    return true;
-                }
+        if (ClassUtil.isJDKClass(raw)) {
+            // 23-Sep-2014, tatu: Should we be conservative here (minimal number
+            //    of matches), or ambitious? Let's do latter for now.
+            if (Collection.class.isAssignableFrom(raw)
+                    || Map.class.isAssignableFrom(raw)) {
+                return true;
             }
         }
         return false;
-    }
-
-    protected BasicBeanDescription _findStdJdkCollectionDesc(MapperConfig<?> cfg, JavaType type)
-    {
-        if (_isStdJDKCollection(type)) {
-            AnnotatedClass ac = AnnotatedClass.construct(type, cfg);
-            return BasicBeanDescription.forOtherUse(cfg, type, ac);
-        }
-        return null;
     }
 }

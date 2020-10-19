@@ -6,17 +6,19 @@ import java.util.*;
 import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.annotation.JsonTypeInfo.As;
 import com.fasterxml.jackson.annotation.JsonTypeInfo.Id;
+
 import com.fasterxml.jackson.core.*;
+
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.KeyDeserializer;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.annotation.*;
 import com.fasterxml.jackson.databind.cfg.HandlerInstantiator;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
 import com.fasterxml.jackson.databind.introspect.Annotated;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
 import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
 import com.fasterxml.jackson.databind.jsontype.impl.TypeIdResolverBase;
@@ -127,7 +129,7 @@ public class TestHandlerInstantiation extends BaseMapTest
         }
 
         @Override
-        public String idFromValue(Object value)
+        public String idFromValue(DatabindContext ctxt, Object value)
         {
             if (value.getClass() == TypeIdBean.class) {
                 return _id;
@@ -136,8 +138,8 @@ public class TestHandlerInstantiation extends BaseMapTest
         }
 
         @Override
-        public String idFromValueAndType(Object value, Class<?> type) {
-            return idFromValue(value);
+        public String idFromValueAndType(DatabindContext ctxt, Object value, Class<?> type) {
+            return idFromValue(ctxt, value);
         }
 
         @Override
@@ -156,7 +158,7 @@ public class TestHandlerInstantiation extends BaseMapTest
             return null;
         }
         @Override
-        public String idFromBaseType() {
+        public String idFromBaseType(DatabindContext ctxt) {
             return "xxx";
         }
     }
@@ -233,16 +235,18 @@ public class TestHandlerInstantiation extends BaseMapTest
 
     public void testDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.setHandlerInstantiator(new MyInstantiator("abc:"));
+        JsonMapper mapper = JsonMapper.builder()
+                .handlerInstantiator(new MyInstantiator("abc:"))
+                .build();
         MyBean result = mapper.readValue(quote("123"), MyBean.class);
         assertEquals("abc:123", result.value);
     }
 
     public void testKeyDeserializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.setHandlerInstantiator(new MyInstantiator("abc:"));
+        JsonMapper mapper = JsonMapper.builder()
+                .handlerInstantiator(new MyInstantiator("abc:"))
+                .build();
         MyMap map = mapper.readValue("{\"a\":\"b\"}", MyMap.class);
         // easiest to test by just serializing...
         assertEquals("{\"KEY\":\"b\"}", mapper.writeValueAsString(map));
@@ -250,15 +254,17 @@ public class TestHandlerInstantiation extends BaseMapTest
     
     public void testSerializer() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.setHandlerInstantiator(new MyInstantiator("xyz:"));
+        JsonMapper mapper = JsonMapper.builder()
+                .handlerInstantiator(new MyInstantiator("xyz:"))
+                .build();
         assertEquals(quote("xyz:456"), mapper.writeValueAsString(new MyBean("456")));
     }
 
     public void testTypeIdResolver() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.setHandlerInstantiator(new MyInstantiator("foobar"));
+        JsonMapper mapper = JsonMapper.builder()
+                .handlerInstantiator(new MyInstantiator("foobar"))
+                .build();
         String json = mapper.writeValueAsString(new TypeIdBeanWrapper(new TypeIdBean(123)));
         // should now use our custom id scheme:
         assertEquals("{\"bean\":[\"!!!\",{\"x\":123}]}", json);

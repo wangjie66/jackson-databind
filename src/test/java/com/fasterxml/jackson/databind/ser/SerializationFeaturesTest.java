@@ -3,13 +3,9 @@ package com.fasterxml.jackson.databind.ser;
 import java.io.*;
 import java.util.*;
 
-import com.fasterxml.jackson.annotation.*;
-import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
-
 import com.fasterxml.jackson.core.JsonGenerator;
 
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
 
 /**
  * Unit tests for checking handling of some of {@link MapperFeature}s
@@ -18,52 +14,6 @@ import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
 public class SerializationFeaturesTest
     extends BaseMapTest
 {
-    /**
-     * Class with one explicitly defined getter, one name-based
-     * auto-detectable getter.
-     */
-    static class GetterClass
-    {
-        @JsonProperty("x") public int getX() { return -2; }
-        public int getY() { return 1; }
-    }
-
-    /**
-     * Another test-class that explicitly disables auto-detection
-     */
-    @JsonAutoDetect(getterVisibility=Visibility.NONE)
-    static class DisabledGetterClass
-    {
-        @JsonProperty("x") public int getX() { return -2; }
-        public int getY() { return 1; }
-    }
-
-    /**
-     * Another test-class that explicitly enables auto-detection
-     */
-    @JsonAutoDetect(isGetterVisibility=Visibility.NONE)
-    static class EnabledGetterClass
-    {
-        @JsonProperty("x") public int getX() { return -2; }
-        public int getY() { return 1; }
-
-        // not auto-detected, since "is getter" auto-detect disabled
-        public boolean isOk() { return true; }
-    }
-
-    /**
-     * One more: only detect "isXxx", not "getXXX"
-     */
-    @JsonAutoDetect(getterVisibility=Visibility.NONE)
-    static class EnabledIsGetterClass
-    {
-        // Won't be auto-detected any more
-        public int getY() { return 1; }
-
-        // but this will be
-        public boolean isOk() { return true; }
-    }
-
     static class CloseableBean implements Closeable
     {
         public int a = 3;
@@ -83,101 +33,34 @@ public class SerializationFeaturesTest
         public StringListBean(Collection<String> v) { values = v; }
     }
 
-    static class TCls {
-        @JsonProperty("groupname")
-        private String groupname;
-
-        public void setName(String str) {
-            this.groupname = str;
-        }
-        public String getName() {
-            return groupname;
-        }
-    }
-
     /*
     /**********************************************************
     /* Test methods
     /**********************************************************
      */
 
-    public void testGlobalAutoDetection() throws IOException
-    {
-        // First: auto-detection enabled (default):
-        ObjectMapper m = new ObjectMapper();
-        Map<String,Object> result = writeAndMap(m, new GetterClass());
-        assertEquals(2, result.size());
-        assertEquals(Integer.valueOf(-2), result.get("x"));
-        assertEquals(Integer.valueOf(1), result.get("y"));
+    private final ObjectMapper MAPPER = new ObjectMapper();
 
-        // Then auto-detection disabled. But note: we MUST create a new
-        // mapper, since old version of serializer may be cached by now
-        m = new ObjectMapper();
-        m.configure(MapperFeature.AUTO_DETECT_GETTERS, false);
-        result = writeAndMap(m, new GetterClass());
-        assertEquals(1, result.size());
-        assertTrue(result.containsKey("x"));
-    }
-
-    public void testPerClassAutoDetection() throws IOException
-    {
-        // First: class-level auto-detection disabling
-        ObjectMapper m = new ObjectMapper();
-        Map<String,Object> result = writeAndMap(m, new DisabledGetterClass());
-        assertEquals(1, result.size());
-        assertTrue(result.containsKey("x"));
-
-        // And then class-level auto-detection enabling, should override defaults
-        m.configure(MapperFeature.AUTO_DETECT_GETTERS, false);
-        result = writeAndMap(m, new EnabledGetterClass());
-        assertEquals(2, result.size());
-        assertTrue(result.containsKey("x"));
-        assertTrue(result.containsKey("y"));
-    }
-
-    public void testPerClassAutoDetectionForIsGetter() throws IOException
-    {
-        ObjectMapper m = new ObjectMapper();
-        // class level should override
-        m.configure(MapperFeature.AUTO_DETECT_GETTERS, true);
-        m.configure(MapperFeature.AUTO_DETECT_IS_GETTERS, false);
-         Map<String,Object> result = writeAndMap(m, new EnabledIsGetterClass());
-        assertEquals(1, result.size());
-        assertTrue(result.containsKey("ok"));
-        assertEquals(Boolean.TRUE, result.get("ok"));
-    }
-
-    // Simple test verifying that chainable methods work ok...
-    public void testConfigChainability()
-    {
-        ObjectMapper m = new ObjectMapper();
-        assertTrue(m.isEnabled(MapperFeature.AUTO_DETECT_SETTERS));
-        assertTrue(m.isEnabled(MapperFeature.AUTO_DETECT_GETTERS));
-        m.configure(MapperFeature.AUTO_DETECT_SETTERS, false)
-            .configure(MapperFeature.AUTO_DETECT_GETTERS, false);
-        assertFalse(m.isEnabled(MapperFeature.AUTO_DETECT_SETTERS));
-        assertFalse(m.isEnabled(MapperFeature.AUTO_DETECT_GETTERS));
-    }
-
-    // Test for [JACKSON-282]
     @SuppressWarnings("resource")
     public void testCloseCloseable() throws IOException
     {
-        ObjectMapper m = new ObjectMapper();
         // default should be disabled:
         CloseableBean bean = new CloseableBean();
-        m.writeValueAsString(bean);
+        MAPPER.writeValueAsString(bean);
         assertFalse(bean.wasClosed);
 
         // but can enable it:
-        m.configure(SerializationFeature.CLOSE_CLOSEABLE, true);
         bean = new CloseableBean();
-        m.writeValueAsString(bean);
+        MAPPER.writer()
+            .with(SerializationFeature.CLOSE_CLOSEABLE)
+            .writeValueAsString(bean);
         assertTrue(bean.wasClosed);
 
         // also: let's ensure that ObjectWriter won't interfere with it
         bean = new CloseableBean();
-        m.writerFor(CloseableBean.class).writeValueAsString(bean);
+        MAPPER.writerFor(CloseableBean.class)
+            .with(SerializationFeature.CLOSE_CLOSEABLE)
+            .writeValueAsString(bean);
         assertTrue(bean.wasClosed);
     }
 
@@ -190,38 +73,36 @@ public class SerializationFeaturesTest
         assertEquals(quote("abc"), m.writeValueAsString(chars));
         
         // new feature: serialize as JSON array:
-        m.configure(SerializationFeature.WRITE_CHAR_ARRAYS_AS_JSON_ARRAYS, true);
-        assertEquals("[\"a\",\"b\",\"c\"]", m.writeValueAsString(chars));
+        assertEquals("[\"a\",\"b\",\"c\"]",
+                m.writer()
+                .with(SerializationFeature.WRITE_CHAR_ARRAYS_AS_JSON_ARRAYS)
+                .writeValueAsString(chars));
     }
 
-    // Test for [JACKSON-401]
     public void testFlushingAutomatic() throws IOException
     {
         ObjectMapper mapper = new ObjectMapper();
-        assertTrue(mapper.getSerializationConfig().isEnabled(SerializationFeature.FLUSH_AFTER_WRITE_VALUE));
+        assertTrue(mapper.serializationConfig().isEnabled(SerializationFeature.FLUSH_AFTER_WRITE_VALUE));
         // default is to flush after writeValue()
         StringWriter sw = new StringWriter();
-        JsonGenerator g = mapper.getFactory().createGenerator(sw);
-        mapper.writeValue(g, Integer.valueOf(13));
+        mapper.writeValue(sw, Integer.valueOf(13));
         assertEquals("13", sw.toString());
-        g.close();
 
         // ditto with ObjectWriter
         sw = new StringWriter();
-        g = mapper.getFactory().createGenerator(sw);
         ObjectWriter ow = mapper.writer();
-        ow.writeValue(g, Integer.valueOf(99));
+        ow.writeValue(sw, Integer.valueOf(99));
         assertEquals("99", sw.toString());
-        g.close();
     }
 
     public void testFlushingNotAutomatic() throws IOException
     {
         // but should not occur if configured otherwise
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.configure(SerializationFeature.FLUSH_AFTER_WRITE_VALUE, false);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .configure(SerializationFeature.FLUSH_AFTER_WRITE_VALUE, false)
+                .build();
         StringWriter sw = new StringWriter();
-        JsonGenerator g = mapper.getFactory().createGenerator(sw);
+        JsonGenerator g = mapper.createGenerator(sw);
 
         mapper.writeValue(g, Integer.valueOf(13));
         // no flushing now:
@@ -232,7 +113,7 @@ public class SerializationFeaturesTest
         g.close();
         // Also, same should happen with ObjectWriter
         sw = new StringWriter();
-        g = mapper.getFactory().createGenerator(sw);
+        g = mapper.createGenerator(sw);
         ObjectWriter ow = mapper.writer();
         ow.writeValue(g, Integer.valueOf(99));
         assertEquals("", sw.toString());
@@ -258,7 +139,7 @@ public class SerializationFeaturesTest
         HashSet<Long> longs = new HashSet<Long>();
         longs.add(42L);
         assertEquals("42", writer.writeValueAsString(longs));
-        // [Issue#180]
+        // [databind#180]
         final String EXP_STRINGS = "{\"values\":\"foo\"}";
         assertEquals(EXP_STRINGS, writer.writeValueAsString(new StringListBean(Collections.singletonList("foo"))));
 
@@ -268,29 +149,24 @@ public class SerializationFeaturesTest
         
         // arrays:
         assertEquals("true", writer.writeValueAsString(new boolean[] { true }));
+        assertEquals("[true,false]", writer.writeValueAsString(new boolean[] { true, false }));
         assertEquals("true", writer.writeValueAsString(new Boolean[] { Boolean.TRUE }));
+
+        assertEquals("3", writer.writeValueAsString(new short[] { 3 }));
+        assertEquals("[3,2]", writer.writeValueAsString(new short[] { 3, 2 }));
+        
         assertEquals("3", writer.writeValueAsString(new int[] { 3 }));
+        assertEquals("[3,2]", writer.writeValueAsString(new int[] { 3, 2 }));
+
+        assertEquals("1", writer.writeValueAsString(new long[] { 1L }));
+        assertEquals("[-1,4]", writer.writeValueAsString(new long[] { -1L, 4L }));
+
+        assertEquals("0.5", writer.writeValueAsString(new double[] { 0.5 }));
+        assertEquals("[0.5,2.5]", writer.writeValueAsString(new double[] { 0.5, 2.5 }));
+
+        assertEquals("0.5", writer.writeValueAsString(new float[] { 0.5f }));
+        assertEquals("[0.5,2.5]", writer.writeValueAsString(new float[] { 0.5f, 2.5f }));
+        
         assertEquals(quote("foo"), writer.writeValueAsString(new String[] { "foo" }));
-    }
-
-    public void testVisibilityFeatures() throws Exception
-    {
-        ObjectMapper om = new ObjectMapper();
-        // Only use explicitly specified values to be serialized/deserialized (i.e., JSONProperty).
-        om.configure(MapperFeature.AUTO_DETECT_FIELDS, false);
-        om.configure(MapperFeature.AUTO_DETECT_GETTERS, false);
-        om.configure(MapperFeature.AUTO_DETECT_SETTERS, false);
-        om.configure(MapperFeature.AUTO_DETECT_IS_GETTERS, false);
-        om.configure(MapperFeature.USE_GETTERS_AS_SETTERS, false);
-        om.configure(MapperFeature.CAN_OVERRIDE_ACCESS_MODIFIERS, true);
-        om.configure(MapperFeature.INFER_PROPERTY_MUTATORS, false);
-        om.configure(MapperFeature.USE_ANNOTATIONS, true);
-
-        JavaType javaType = om.getTypeFactory().constructType(TCls.class);        
-        BeanDescription desc = (BeanDescription) om.getSerializationConfig().introspect(javaType);
-        List<BeanPropertyDefinition> props = desc.findProperties();
-        if (props.size() != 1) {
-            fail("Should find 1 property, not "+props.size()+"; properties = "+props);
-        }
     }
 }

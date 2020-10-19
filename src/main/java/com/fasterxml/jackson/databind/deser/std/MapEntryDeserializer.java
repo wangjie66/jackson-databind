@@ -8,26 +8,22 @@ import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
 import com.fasterxml.jackson.databind.deser.*;
 import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.type.LogicalType;
 
 /**
  * Basic serializer that can take JSON "Object" structure and
- * construct a {@link java.util.Map} instance, with typed contents.
+ * construct a {@link java.util.Map.Entry} instance, with typed contents.
  *<p>
  * Note: for untyped content (one indicated by passing Object.class
  * as the type), {@link UntypedObjectDeserializer} is used instead.
- * It can also construct {@link java.util.Map}s, but not with specific
+ * It can also construct {@link java.util.Map.Entry}s, but not with specific
  * POJO types, only other containers and primitives/wrappers.
  */
 @JacksonStdImpl
 public class MapEntryDeserializer
     extends ContainerDeserializerBase<Map.Entry<Object,Object>>
-    implements ContextualDeserializer
 {
-    private static final long serialVersionUID = 1;
-
     // // Configuration: typing, deserializers
-
-    protected final JavaType _type;
 
     /**
      * Key deserializer to use; either passed via constructor
@@ -61,7 +57,6 @@ public class MapEntryDeserializer
         if (type.containedTypeCount() != 2) { // sanity check
             throw new IllegalArgumentException("Missing generic type information for "+type);
         }
-        _type = type;
         _keyDeserializer = keyDeser;
         _valueDeserializer = valueDeser;
         _valueTypeDeserializer = valueTypeDeser;
@@ -73,8 +68,7 @@ public class MapEntryDeserializer
      */
     protected MapEntryDeserializer(MapEntryDeserializer src)
     {
-        super(src._type);
-        _type = src._type;
+        super(src);
         _keyDeserializer = src._keyDeserializer;
         _valueDeserializer = src._valueDeserializer;
         _valueTypeDeserializer = src._valueTypeDeserializer;
@@ -84,8 +78,7 @@ public class MapEntryDeserializer
             KeyDeserializer keyDeser, JsonDeserializer<Object> valueDeser,
             TypeDeserializer valueTypeDeser)
     {
-        super(src._type);
-        _type = src._type;
+        super(src);
         _keyDeserializer = keyDeser;
         _valueDeserializer = valueDeser;
         _valueTypeDeserializer = valueTypeDeser;
@@ -108,6 +101,12 @@ public class MapEntryDeserializer
                 keyDeser, (JsonDeserializer<Object>) valueDeser, valueTypeDeser);
     }
 
+    @Override // since 2.12
+    public LogicalType logicalType() {
+        // Slightly tricky, could consider POJO too?
+        return LogicalType.Map;
+    }
+
     /*
     /**********************************************************
     /* Validation, post-processing (ResolvableDeserializer)
@@ -124,7 +123,7 @@ public class MapEntryDeserializer
     {
         KeyDeserializer kd = _keyDeserializer;
         if (kd == null) {
-            kd = ctxt.findKeyDeserializer(_type.containedType(0), property);
+            kd = ctxt.findKeyDeserializer(_containerType.containedType(0), property);
         } else {
             if (kd instanceof ContextualKeyDeserializer) {
                 kd = ((ContextualKeyDeserializer) kd).createContextual(ctxt, property);
@@ -132,7 +131,7 @@ public class MapEntryDeserializer
         }
         JsonDeserializer<?> vd = _valueDeserializer;
         vd = findConvertingContentDeserializer(ctxt, property, vd);
-        JavaType contentType = _type.containedType(1);
+        JavaType contentType = _containerType.containedType(1);
         if (vd == null) {
             vd = ctxt.findContextualValueDeserializer(contentType, property);
         } else { // if directly assigned, probably not yet contextual, so:
@@ -153,14 +152,17 @@ public class MapEntryDeserializer
 
     @Override
     public JavaType getContentType() {
-        return _type.containedType(1);
+        return _containerType.containedType(1);
     }
 
     @Override
     public JsonDeserializer<Object> getContentDeserializer() {
         return _valueDeserializer;
     }
-    
+
+    // 31-May-2020, tatu: Should probably define but we don't have it yet
+//    public ValueInstantiator getValueInstantiator() { }
+
     /*
     /**********************************************************
     /* JsonDeserializer API
@@ -172,28 +174,29 @@ public class MapEntryDeserializer
     public Map.Entry<Object,Object> deserialize(JsonParser p, DeserializationContext ctxt) throws IOException
     {
         // Ok: must point to START_OBJECT, FIELD_NAME or END_OBJECT
-        JsonToken t = p.getCurrentToken();
-        if (t != JsonToken.START_OBJECT && t != JsonToken.FIELD_NAME && t != JsonToken.END_OBJECT) {
-            // String may be ok however:
-            // slightly redundant (since String was passed above), but
-            return _deserializeFromEmpty(p, ctxt);
-        }
+        JsonToken t = p.currentToken();
         if (t == JsonToken.START_OBJECT) {
             t = p.nextToken();
+        } else if (t != JsonToken.FIELD_NAME && t != JsonToken.END_OBJECT) {
+            // Empty array, or single-value wrapped in array?
+            if (t == JsonToken.START_ARRAY) {
+                return _deserializeFromArray(p, ctxt);
+            }
+            return (Map.Entry<Object,Object>) ctxt.handleUnexpectedToken(getValueType(ctxt), p);
         }
         if (t != JsonToken.FIELD_NAME) {
             if (t == JsonToken.END_OBJECT) {
-                ctxt.reportMappingException("Can not deserialize a Map.Entry out of empty JSON Object");
-                return null;
+                return ctxt.reportInputMismatch(this,
+                        "Cannot deserialize a Map.Entry out of empty JSON Object");
             }
-            return (Map.Entry<Object,Object>) ctxt.handleUnexpectedToken(handledType(), p);
+            return (Map.Entry<Object,Object>) ctxt.handleUnexpectedToken(getValueType(ctxt), p);
         }
 
         final KeyDeserializer keyDes = _keyDeserializer;
         final JsonDeserializer<Object> valueDes = _valueDeserializer;
         final TypeDeserializer typeDeser = _valueTypeDeserializer;
 
-        final String keyStr = p.getCurrentName();
+        final String keyStr = p.currentName();
         Object key = keyDes.deserializeKey(keyStr, ctxt);
         Object value = null;
         // And then the value...
@@ -215,10 +218,13 @@ public class MapEntryDeserializer
         t = p.nextToken();
         if (t != JsonToken.END_OBJECT) {
             if (t == JsonToken.FIELD_NAME) { // most likely
-                ctxt.reportMappingException("Problem binding JSON into Map.Entry: more than one entry in JSON (second field: '"+p.getCurrentName()+"')");
+                ctxt.reportInputMismatch(this,
+                        "Problem binding JSON into Map.Entry: more than one entry in JSON (second field: '%s')",
+                        p.currentName());
             } else {
                 // how would this occur?
-                ctxt.reportMappingException("Problem binding JSON into Map.Entry: unexpected content after JSON Object entry: "+t);
+                ctxt.reportInputMismatch(this,
+                        "Problem binding JSON into Map.Entry: unexpected content after JSON Object entry: "+t);
             }
             return null;
         }
@@ -229,23 +235,15 @@ public class MapEntryDeserializer
     public Map.Entry<Object,Object> deserialize(JsonParser p, DeserializationContext ctxt,
             Map.Entry<Object,Object> result) throws IOException
     {
-        throw new IllegalStateException("Can not update Map.Entry values");
+        throw new IllegalStateException("Cannot update Map.Entry values");
     }
 
     @Override
     public Object deserializeWithType(JsonParser p, DeserializationContext ctxt,
             TypeDeserializer typeDeserializer)
-        throws IOException, JsonProcessingException
+        throws IOException
     {
         // In future could check current token... for now this should be enough:
         return typeDeserializer.deserializeTypedFromObject(p, ctxt);
     }
-
-    /*
-    /**********************************************************
-    /* Other public accessors
-    /**********************************************************
-     */
-
-    @Override public JavaType getValueType() { return _type; }
 }

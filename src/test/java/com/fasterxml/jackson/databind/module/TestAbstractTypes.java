@@ -2,6 +2,8 @@ package com.fasterxml.jackson.databind.module;
 
 import java.util.*;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.Version;
 import com.fasterxml.jackson.databind.BaseMapTest;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,31 +40,71 @@ public class TestAbstractTypes extends BaseMapTest
         public int getValue() { return 3; }
     }
 
+    // [databind#2019]: mappings from multiple modules
+    public interface Datatype1 {
+        String getValue();
+    }
+
+    public interface Datatype2 {
+        String getValue();
+    }
+
+    static class SimpleDatatype1 implements Datatype1 {
+
+        private final String value;
+
+        @JsonCreator
+        public SimpleDatatype1(@JsonProperty("value") String value) {
+            this.value = value;
+        }
+
+        @Override
+        public String getValue() {
+            return value;
+        }
+    }
+
+    static class SimpleDatatype2 implements Datatype2 {
+        private final String value;
+
+        @JsonCreator
+        public SimpleDatatype2(@JsonProperty("value") String value) {
+            this.value = value;
+        }
+
+        @Override
+        public String getValue() {
+            return value;
+        }
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Test methods
-    /**********************************************************
+    /**********************************************************************
      */
 
     public void testCollectionDefaulting() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         SimpleModule mod = new SimpleModule("test", Version.unknownVersion());
         // let's ensure we get hierarchic mapping
         mod.addAbstractTypeMapping(Collection.class, List.class);
         mod.addAbstractTypeMapping(List.class, LinkedList.class);
-        mapper.registerModule(mod);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(mod)
+                .build();
         Collection<?> result = mapper.readValue("[]", Collection.class);
         assertEquals(LinkedList.class, result.getClass());
     }
 
     public void testMapDefaultingBasic() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         SimpleModule mod = new SimpleModule("test", Version.unknownVersion());
         // default is HashMap, so:
         mod.addAbstractTypeMapping(Map.class, TreeMap.class);
-        mapper.registerModule(mod);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(mod)
+                .build();
         Map<?,?> result = mapper.readValue("{}", Map.class);
         assertEquals(TreeMap.class, result.getClass());
     }
@@ -70,14 +112,15 @@ public class TestAbstractTypes extends BaseMapTest
     // [databind#700]
     public void testDefaultingRecursive() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         SimpleModule mod = new SimpleModule("test", Version.unknownVersion());
 
         // defaults: LinkedHashMap, ArrayList
         mod.addAbstractTypeMapping(Map.class, TreeMap.class);
         mod.addAbstractTypeMapping(List.class, LinkedList.class);
 
-        mapper.registerModule(mod);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(mod)
+                .build();
         Object result;
 
         result = mapper.readValue("[ {} ]", Object.class);
@@ -98,11 +141,12 @@ public class TestAbstractTypes extends BaseMapTest
 
     public void testInterfaceDefaulting() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         SimpleModule mod = new SimpleModule("test", Version.unknownVersion());
         // let's ensure we get hierarchic mapping
         mod.addAbstractTypeMapping(CharSequence.class, MyString.class);
-        mapper.registerModule(mod);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModule(mod)
+                .build();
         Object result = mapper.readValue(quote("abc"), CharSequence.class);
         assertEquals(MyString.class, result.getClass());
         assertEquals("abc", ((MyString) result).value);
@@ -110,9 +154,31 @@ public class TestAbstractTypes extends BaseMapTest
         // and ditto for POJOs
         mod = new SimpleModule();
         mod.addAbstractTypeMapping(Abstract.class, AbstractImpl.class);
-        mapper = new ObjectMapper()
-                .registerModule(mod);
+        mapper = jsonMapperBuilder()
+                .addModule(mod)
+                .build();
         Abstract a = mapper.readValue("{}", Abstract.class);
         assertNotNull(a);
+    }
+
+    // [databind#2019]: mappings from multiple modules
+    public void testAbstractMappingsFromTwoModules() throws Exception
+    {
+        SimpleModule module1 = new SimpleModule("module1");
+        module1.addAbstractTypeMapping(Datatype1.class, SimpleDatatype1.class);
+
+        SimpleModule module2 = new SimpleModule("module2");
+        module2.addAbstractTypeMapping(Datatype2.class, SimpleDatatype2.class);
+
+        ObjectMapper mapper = jsonMapperBuilder()
+                .addModules(module1, module2)
+                .build();
+
+        final String JSON_EXAMPLE = "{\"value\": \"aaa\"}";
+        Datatype1 value1 = mapper.readValue(JSON_EXAMPLE, Datatype1.class);
+        assertNotNull(value1);
+
+        Datatype2 value2 = mapper.readValue(JSON_EXAMPLE, Datatype2.class);
+        assertNotNull(value2);
     }
 }

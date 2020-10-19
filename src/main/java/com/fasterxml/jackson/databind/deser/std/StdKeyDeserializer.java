@@ -1,6 +1,7 @@
 package com.fasterxml.jackson.databind.deser.std;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
@@ -27,10 +28,7 @@ import com.fasterxml.jackson.databind.util.TokenBuffer;
  */
 @JacksonStdImpl
 public class StdKeyDeserializer extends KeyDeserializer
-    implements java.io.Serializable
 {
-    private static final long serialVersionUID = 1L;
-
     public final static int TYPE_BOOLEAN = 1;
     public final static int TYPE_BYTE = 2;
     public final static int TYPE_SHORT = 3;
@@ -47,6 +45,7 @@ public class StdKeyDeserializer extends KeyDeserializer
     public final static int TYPE_URL = 14;
     public final static int TYPE_CLASS = 15;
     public final static int TYPE_CURRENCY = 16;
+    public final static int TYPE_BYTE_ARRAY = 17; // since 2.9
 
     final protected int _kind;
     final protected Class<?> _keyClass;
@@ -71,9 +70,13 @@ public class StdKeyDeserializer extends KeyDeserializer
         int kind;
 
         // first common types:
-        if (raw == String.class || raw == Object.class || raw == CharSequence.class) {
+        if (raw == String.class || raw == Object.class
+                || raw == CharSequence.class
+                // see [databind#2115]:
+                || raw == Serializable.class) {
             return StringKD.forType(raw);
-        } else if (raw == UUID.class) {
+        }
+        if (raw == UUID.class) {
             kind = TYPE_UUID;
         } else if (raw == Integer.class) {
             kind = TYPE_INT;
@@ -108,6 +111,8 @@ public class StdKeyDeserializer extends KeyDeserializer
         } else if (raw == Currency.class) {
             FromStringDeserializer<?> deser = FromStringDeserializer.findDeserializer(Currency.class);
             return new StdKeyDeserializer(TYPE_CURRENCY, raw, deser);
+        } else if (raw == byte[].class) {
+            kind = TYPE_BYTE_ARRAY;
         } else {
             return null;
         }
@@ -128,9 +133,11 @@ public class StdKeyDeserializer extends KeyDeserializer
             }
         } catch (Exception re) {
             return ctxt.handleWeirdKey(_keyClass, key, "not a valid representation, problem: (%s) %s",
-                    re.getClass().getName(), re.getMessage());
+                    re.getClass().getName(),
+                    ClassUtil.exceptionMessage(re));
         }
-        if (_keyClass.isEnum() && ctxt.getConfig().isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)) {
+        if (ClassUtil.isEnumType(_keyClass)
+                && ctxt.getConfig().isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)) {
             return null;
         }
         return ctxt.handleWeirdKey(_keyClass, key, "not a valid representation");
@@ -154,7 +161,7 @@ public class StdKeyDeserializer extends KeyDeserializer
                 int value = _parseInt(key);
                 // allow range up to 255, inclusive (to support "unsigned" byte)
                 if (value < Byte.MIN_VALUE || value > 255) {
-                    return ctxt.handleWeirdKey(_keyClass, key, "overflow, value can not be represented as 8-bit value");
+                    return ctxt.handleWeirdKey(_keyClass, key, "overflow, value cannot be represented as 8-bit value");
                 }
                 return Byte.valueOf((byte) value);
             }
@@ -162,7 +169,7 @@ public class StdKeyDeserializer extends KeyDeserializer
             {
                 int value = _parseInt(key);
                 if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
-                    return ctxt.handleWeirdKey(_keyClass, key, "overflow, value can not be represented as 16-bit value");
+                    return ctxt.handleWeirdKey(_keyClass, key, "overflow, value cannot be represented as 16-bit value");
                     // fall-through and truncate if need be
                 }
                 return Short.valueOf((short) value);
@@ -186,43 +193,48 @@ public class StdKeyDeserializer extends KeyDeserializer
         case TYPE_LOCALE:
             try {
                 return _deser._deserialize(key, ctxt);
-            } catch (IOException e) {
-                return ctxt.handleWeirdKey(_keyClass, key, "unable to parse key as locale");
+            } catch (IllegalArgumentException e) {
+                return _weirdKey(ctxt, key, e);
             }
         case TYPE_CURRENCY:
             try {
                 return _deser._deserialize(key, ctxt);
-            } catch (IOException e) {
-                return ctxt.handleWeirdKey(_keyClass, key, "unable to parse key as currency");
+            } catch (IllegalArgumentException e) {
+                return _weirdKey(ctxt, key, e);
             }
         case TYPE_DATE:
             return ctxt.parseDate(key);
         case TYPE_CALENDAR:
-            java.util.Date date = ctxt.parseDate(key);
-            return (date == null)  ? null : ctxt.constructCalendar(date);
+            return ctxt.constructCalendar(ctxt.parseDate(key));
         case TYPE_UUID:
             try {
                 return UUID.fromString(key);
             } catch (Exception e) {
-                return ctxt.handleWeirdKey(_keyClass, key, "problem: %s", e.getMessage());
+                return _weirdKey(ctxt, key, e);
             }
         case TYPE_URI:
             try {
                 return URI.create(key);
             } catch (Exception e) {
-                return ctxt.handleWeirdKey(_keyClass, key, "problem: %s", e.getMessage());
+                return _weirdKey(ctxt, key, e);
             }
         case TYPE_URL:
             try {
                 return new URL(key);
             } catch (MalformedURLException e) {
-                return ctxt.handleWeirdKey(_keyClass, key, "problem: %s", e.getMessage());
+                return _weirdKey(ctxt, key, e);
             }
         case TYPE_CLASS:
             try {
                 return ctxt.findClass(key);
             } catch (Exception e) {
                 return ctxt.handleWeirdKey(_keyClass, key, "unable to parse key as Class");
+            }
+        case TYPE_BYTE_ARRAY:
+            try {
+                return ctxt.getConfig().getBase64Variant().decode(key);
+            } catch (IllegalArgumentException e) {
+                return _weirdKey(ctxt, key, e);
             }
         default:
             throw new IllegalStateException("Internal error: unknown key type "+_keyClass);
@@ -247,6 +259,12 @@ public class StdKeyDeserializer extends KeyDeserializer
         return NumberInput.parseDouble(key);
     }
 
+    // @since 2.9
+    protected Object _weirdKey(DeserializationContext ctxt, String key, Exception e) throws IOException {
+        return ctxt.handleWeirdKey(_keyClass, key, "problem: %s",
+                ClassUtil.exceptionMessage(e));
+    }
+
     /*
     /**********************************************************
     /* First: the standard "String as String" deserializer
@@ -256,7 +274,6 @@ public class StdKeyDeserializer extends KeyDeserializer
     @JacksonStdImpl
     final static class StringKD extends StdKeyDeserializer
     {
-        private static final long serialVersionUID = 1L;
         private final static StringKD sString = new StringKD(String.class);
         private final static StringKD sObject = new StringKD(Object.class);
         
@@ -292,10 +309,7 @@ public class StdKeyDeserializer extends KeyDeserializer
      */
     final static class DelegatingKD
         extends KeyDeserializer // note: NOT the std one
-        implements java.io.Serializable
     {
-        private static final long serialVersionUID = 1L;
-
         final protected Class<?> _keyClass;
 
         protected final JsonDeserializer<?> _delegate;
@@ -317,7 +331,7 @@ public class StdKeyDeserializer extends KeyDeserializer
             tb.writeString(key);
             try {
                 // Ugh... should not have to give parser which may or may not be correct one...
-                JsonParser p = tb.asParser();
+                JsonParser p = tb.asParser(ctxt);
                 p.nextToken();
                 Object result = _delegate.deserialize(p, ctxt);
                 if (result != null) {
@@ -331,12 +345,10 @@ public class StdKeyDeserializer extends KeyDeserializer
 
         public Class<?> getKeyClass() { return _keyClass; }
     }
-     
+
     @JacksonStdImpl
     final static class EnumKD extends StdKeyDeserializer
     {
-        private static final long serialVersionUID = 1L;
-
         protected final EnumResolver _byNameResolver;
 
         protected final AnnotatedMethod _factory;
@@ -348,11 +360,14 @@ public class StdKeyDeserializer extends KeyDeserializer
          * @since 2.7.3
          */
         protected EnumResolver _byToStringResolver;
+
+        protected final Enum<?> _enumDefaultValue;
         
         protected EnumKD(EnumResolver er, AnnotatedMethod factory) {
             super(-1, er.getEnumClass());
             _byNameResolver = er;
             _factory = factory;
+            _enumDefaultValue = er.getDefaultValue();
         }
 
         @Override
@@ -368,9 +383,14 @@ public class StdKeyDeserializer extends KeyDeserializer
             EnumResolver res = ctxt.isEnabled(DeserializationFeature.READ_ENUMS_USING_TO_STRING)
                     ? _getToStringResolver(ctxt) : _byNameResolver;
             Enum<?> e = res.findEnum(key);
-            if ((e == null) && !ctxt.getConfig().isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)) {
-                return ctxt.handleWeirdKey(_keyClass, key, "not one of values excepted for Enum class: %s",
+            if (e == null) {
+                if ((_enumDefaultValue != null)
+                        && ctxt.isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE)) {
+                    e = _enumDefaultValue;
+                } else if (!ctxt.isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)) {
+                    return ctxt.handleWeirdKey(_keyClass, key, "not one of the values accepted for Enum class: %s",
                         res.getEnumIds());
+                }
                 // fall-through if problems are collected, not immediately thrown
             }
             return e;
@@ -381,8 +401,9 @@ public class StdKeyDeserializer extends KeyDeserializer
             EnumResolver res = _byToStringResolver;
             if (res == null) {
                 synchronized (this) {
-                    res = EnumResolver.constructUnsafeUsingToString(_byNameResolver.getEnumClass(),
-                            ctxt.getAnnotationIntrospector());
+                    res = EnumResolver.constructUnsafeUsingToString(ctxt.getConfig(),
+                            _byNameResolver.getEnumClass());
+                    _byToStringResolver = res;
                 }
             }
             return res;
@@ -395,8 +416,6 @@ public class StdKeyDeserializer extends KeyDeserializer
      */
     final static class StringCtorKeyDeserializer extends StdKeyDeserializer
     {
-        private static final long serialVersionUID = 1L;
-
         protected final Constructor<?> _ctor;
 
         public StringCtorKeyDeserializer(Constructor<?> ctor) {
@@ -417,8 +436,6 @@ public class StdKeyDeserializer extends KeyDeserializer
      */
     final static class StringFactoryKeyDeserializer extends StdKeyDeserializer
     {
-        private static final long serialVersionUID = 1L;
-
         final Method _factoryMethod;
 
         public StringFactoryKeyDeserializer(Method fm) {

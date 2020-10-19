@@ -4,10 +4,12 @@ import java.io.IOException;
 import java.util.Collection;
 
 import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.databind.deser.BeanDeserializerFactory;
-import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
+
+import com.fasterxml.jackson.databind.deser.*;
 import com.fasterxml.jackson.databind.deser.impl.ObjectIdReader;
 import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.type.LogicalType;
+import com.fasterxml.jackson.databind.util.AccessPattern;
 import com.fasterxml.jackson.databind.util.NameTransformer;
 
 /**
@@ -21,33 +23,74 @@ import com.fasterxml.jackson.databind.util.NameTransformer;
  *<p>
  * If deserializer is an aggregate one -- meaning it delegates handling of some
  * of its contents by using other deserializer(s) -- it typically also needs
- * to implement {@link com.fasterxml.jackson.databind.deser.ResolvableDeserializer},
- * which can locate dependant deserializers. This is important to allow dynamic
+ * to implement {@link #resolve}
+ * which can locate dependent deserializers. This is important to allow dynamic
  * overrides of deserializers; separate call interface is needed to separate
- * resolution of dependant deserializers (which may have cyclic link back
+ * resolution of dependent deserializers (which may have cyclic link back
  * to deserializer itself, directly or indirectly).
  *<p>
  * In addition, to support per-property annotations (to configure aspects
  * of deserialization on per-property basis), deserializers may want
- * to implement 
- * {@link com.fasterxml.jackson.databind.deser.ContextualDeserializer},
- * which allows specialization of deserializers: call to
- * {@link com.fasterxml.jackson.databind.deser.ContextualDeserializer#createContextual}
- * is passed information on property, and can create a newly configured
+ * to override
+ * {@link #createContextual} which allows specialization of deserializers:
+ * it is passed information on property, and can create a newly configured
  * deserializer for handling that particular property.
- *<p>
- * If both
- * {@link com.fasterxml.jackson.databind.deser.ResolvableDeserializer} and
- * {@link com.fasterxml.jackson.databind.deser.ContextualDeserializer}
- * are implemented, resolution of deserializers occurs before
- * contextualization.
+ *<br>
+ * Resolution of deserializers occurs before contextualization.
  */
 public abstract class JsonDeserializer<T>
+    implements NullValueProvider
 {
     /*
-    /**********************************************************
+    /**********************************************************************
+    /* Initialization, with former `ResolvableDeserializer`, `ContextualDeserializer`
+    /**********************************************************************
+     */
+
+    /**
+     * Method called after deserializer instance has been constructed
+     * (and registered as necessary by provider objects),
+     * but before it has returned it to the caller.
+     * Called object can then resolve its dependencies to other types,
+     * including self-references (direct or indirect).
+     *
+     * @param ctxt Context to use for accessing configuration, resolving
+     *    secondary deserializers
+     */
+    public void resolve(DeserializationContext ctxt) throws JsonMappingException {
+        // Default implementation does nothing
+    }
+
+    /**
+     * Method called to see if a different (or differently configured) deserializer
+     * is needed to deserialize values of specified property.
+     * Note that instance that this method is called on is typically shared one and
+     * as a result method should <b>NOT</b> modify this instance but rather construct
+     * and return a new instance. This instance should only be returned as-is, in case
+     * it is already suitable for use.
+     * 
+     * @param ctxt Deserialization context to access configuration, additional 
+     *    deserializers that may be needed by this deserializer
+     * @param property Method, field or constructor parameter that represents the property
+     *   (and is used to assign deserialized value).
+     *   Should be available; but there may be cases where caller cannot provide it and
+     *   null is passed instead (in which case impls usually pass 'this' deserializer as is)
+     * 
+     * @return Deserializer to use for deserializing values of specified property;
+     *   may be this instance or a new instance.
+     * 
+     * @throws JsonMappingException
+     */
+    public JsonDeserializer<?> createContextual(DeserializationContext ctxt,
+            BeanProperty property) throws JsonMappingException {
+        // default implementation returns instance unmodified
+        return this;
+    }
+
+    /*
+    /**********************************************************************
     /* Main deserialization methods
-    /**********************************************************
+    /**********************************************************************
      */
     
     /**
@@ -80,8 +123,8 @@ public abstract class JsonDeserializer<T>
      *  after the @class. Thus, if you want your method to work correctly
      *  both with and without polymorphism, you must begin your method with:
      *  <pre>
-     *       if (jp.getCurrentToken() == JsonToken.START_OBJECT) {
-     *         jp.nextToken();
+     *       if (p.currentToken() == JsonToken.START_OBJECT) {
+     *         p.nextToken();
      *       }
      *  </pre>
      * This results in the stream pointing to the field name, so that
@@ -121,10 +164,10 @@ public abstract class JsonDeserializer<T>
      * update-existing-value operation (esp. immutable types)
      */
     public T deserialize(JsonParser p, DeserializationContext ctxt, T intoValue)
-        throws IOException, JsonProcessingException
+        throws IOException
     {
-        throw new UnsupportedOperationException("Can not update object of type "
-                +intoValue.getClass().getName()+" (by deserializer of type "+getClass().getName()+")");
+        ctxt.handleBadMerge(this);
+        return deserialize(p, ctxt);
     }
 
     /**
@@ -149,10 +192,26 @@ public abstract class JsonDeserializer<T>
         return typeDeserializer.deserializeTypedFromAny(p, ctxt);
     }
 
+    /**
+     * Method similar to {@link #deserializeWithType(JsonParser,DeserializationContext,TypeDeserializer)}
+     * but called when merging value. Considered "bad merge" by default implementation,
+     * but if {@link MapperFeature#IGNORE_MERGE_FOR_UNMERGEABLE} is enabled will simple delegate to
+     * {@link #deserializeWithType(JsonParser, DeserializationContext, TypeDeserializer)}.
+     *
+     * @since 2.10
+     */
+    public Object deserializeWithType(JsonParser p, DeserializationContext ctxt,
+            TypeDeserializer typeDeserializer, T intoValue)
+        throws IOException
+    {
+        ctxt.handleBadMerge(this);
+        return deserializeWithType(p, ctxt, typeDeserializer);
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Fluent factory methods for constructing decorated versions
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -164,7 +223,8 @@ public abstract class JsonDeserializer<T>
      * Default implementation just returns 'this'
      * indicating that no unwrapped variant exists
      */
-    public JsonDeserializer<T> unwrappingDeserializer(NameTransformer unwrapper) {
+    public JsonDeserializer<T> unwrappingDeserializer(DeserializationContext ctxt,
+            NameTransformer unwrapper) {
         return this;
     }
 
@@ -174,22 +234,20 @@ public abstract class JsonDeserializer<T>
      * delegate anything; or it does not want any changes), should either
      * throw {@link UnsupportedOperationException} (if operation does not
      * make sense or is not allowed); or return this deserializer as is.
-     * 
-     * @since 2.1
      */
     public JsonDeserializer<?> replaceDelegatee(JsonDeserializer<?> delegatee) {
         throw new UnsupportedOperationException();
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Introspection methods for figuring out configuration/setup
     /* of this deserializer instance and/or type it handles
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
-     * Method for accessing type of values this deserializer produces.
+     * Method for accessing concrete physical type of values this deserializer produces.
      * Note that this information is not guaranteed to be exact -- it
      * may be a more generic (super-type) -- but it should not be
      * incorrect (return a non-related type).
@@ -197,24 +255,35 @@ public abstract class JsonDeserializer<T>
      * Default implementation will return null, which means almost same
      * same as returning <code>Object.class</code> would; that is, that
      * nothing is known about handled type.
-     *<p>
-     * @since 2.3
+     *
+     * @return Physical type of values this deserializer produces, if known;
+     *    {@code null} if not
      */
     public Class<?> handledType() { return null; }
+
+    /**
+     * Method for accessing logical type of values this deserializer produces.
+     * Typically used for further configuring handling of values, for example,
+     * to find which coercions are legal.
+     *
+     * @return Logical type of values this deserializer produces, if known;
+     *    {@code null} if not
+     */
+    public LogicalType logicalType() { return null; }
 
     /**
      * Method called to see if deserializer instance is cachable and
      * usable for other properties of same type (type for which instance
      * was created).
      *<p>
-     * Note that cached instances are still resolved on per-property basis,
-     * if instance implements {@link com.fasterxml.jackson.databind.deser.ResolvableDeserializer}:
-     * cached instance is just as the base. This means that in most cases it is safe to
+     * Note that cached instances are still contextualized on per-property basis
+     * (but note that {@link JsonDeserializer#resolve(DeserializationContext)}d
+     * just once!)
+     * This means that in most cases it is safe to
      * cache instances; however, it only makes sense to cache instances
      * if instantiation is expensive, or if instances are heavy-weight.
      *<p>
-     * Default implementation returns false, to indicate that no caching
-     * is done.
+     * Default implementation returns false, to indicate that no caching is done.
      */
     public boolean isCachable() { return false; }
 
@@ -226,8 +295,6 @@ public abstract class JsonDeserializer<T>
      * 
      * @return Deserializer this deserializer delegates calls to, if null;
      *   null otherwise.
-     * 
-     * @since 2.1
      */
     public JsonDeserializer<?> getDelegatee() {
         return null;
@@ -242,19 +309,17 @@ public abstract class JsonDeserializer<T>
      * This is only to be used for error reporting and diagnostics
      * purposes (most commonly, to accompany "unknown property"
      * exception).
-     * 
-     * @since 2.0
      */
     public Collection<Object> getKnownPropertyNames() {
         return null;
     }
 
     /*
-    /**********************************************************
-    /* Other accessors
-    /**********************************************************
+    /**********************************************************************
+    /* Default NullValueProvider implementation
+    /**********************************************************************
      */
-    
+
     /**
      * Method that can be called to determine value to be used for
      * representing null values (values deserialized when JSON token
@@ -262,47 +327,76 @@ public abstract class JsonDeserializer<T>
      * Java null, but for some types (especially primitives) it may be
      * necessary to use non-null values.
      *<p>
-     * Since version 2.6 (in which the context argument was added), call is
-     * expected to be made each and every time a null token needs to
-     * be handled.
+     *<p>
+     * This method may be called once, or multiple times, depending on what
+     * {@link #getNullAccessPattern()} returns.
      *<p>
      * Default implementation simply returns null.
-     * 
-     * @since 2.6 Added to replace earlier no-arguments variant
      */
-    public T getNullValue(DeserializationContext ctxt) throws JsonMappingException {
-        // Change the direction in 2.7
-        return getNullValue();
+    @Override
+    public Object getNullValue(DeserializationContext ctxt) throws JsonMappingException {
+        return null;
     }
 
+    /**
+     *  This method may be called in conjunction with calls to
+     * {@link #getNullValue(DeserializationContext)}, to check whether it needs
+     * to be called just once (static values), or each time empty value is
+     * needed.
+     *<p>
+     * Default implementation indicates that "null value" to use for input null
+     * is simply Java `null` for all deserializers, unless overridden by sub-classes.
+     * This information may be used as optimization.
+     */
+    @Override
+    public AccessPattern getNullAccessPattern() {
+        // Default implementation assumes that the null value does not vary, which
+        // is usually the case for most implementations. But it is not necessarily
+        // `null`; so sub-classes may want to refine further.
+        return AccessPattern.CONSTANT;
+    }
+
+    /**
+     * This method may be called in conjunction with calls to
+     * {@link #getEmptyValue(DeserializationContext)}, to check whether it needs
+     * to be called just once (static values), or each time empty value is
+     * needed.
+     */
+    public AccessPattern getEmptyAccessPattern() {
+        return AccessPattern.DYNAMIC;
+    }
+
+    /*
+    /**********************************************************************
+    /* Other accessors
+    /**********************************************************************
+     */
+    
     /**
      * Method called to determine value to be used for "empty" values
      * (most commonly when deserializing from empty JSON Strings).
      * Usually this is same as {@link #getNullValue} (which in turn
      * is usually simply Java null), but it can be overridden
-     * for types. Or, if type should never be converted from empty
+     * for specific types. Or, if type should never be converted from empty
      * String, method can also throw an exception.
      *<p>
-     * Since version 2.6 (in which the context argument was added), call is
-     * expected to be made each and every time an empty value is needed.
+     * This method may be called once, or multiple times, depending on what
+     * {@link #getEmptyAccessPattern()} returns.
      *<p>
-     * Default implementation simple calls {@link #getNullValue} and
+     * Default implementation simply calls {@link #getNullValue} and
      * returns value.
-     *
-     * @since 2.6 Added to replace earlier no-arguments variant
      */
-    public T getEmptyValue(DeserializationContext ctxt) throws JsonMappingException {
-        // Change the direction in 2.7
-        return getEmptyValue();
+    public Object getEmptyValue(DeserializationContext ctxt) throws JsonMappingException {
+        return getNullValue(ctxt);
     }
-    
+
     /**
      * Accessor that can be used to check whether this deserializer
      * is expecting to possibly get an Object Identifier value instead of full value
      * serialization, and if so, should be able to resolve it to actual
      * Object instance to return as deserialized value.
      *<p>
-     * Default implementation returns null, as support can not be implemented
+     * Default implementation returns null, as support cannot be implemented
      * generically. Some standard deserializers (most notably
      * {@link com.fasterxml.jackson.databind.deser.BeanDeserializer})
      * do implement this feature, and may return reader instance, depending on exact
@@ -311,45 +405,44 @@ public abstract class JsonDeserializer<T>
      * @return ObjectIdReader used for resolving possible Object Identifier
      *    value, instead of full value serialization, if deserializer can do that;
      *    null if no Object Id is expected.
-     * 
-     * @since 2.0
      */
-    public ObjectIdReader getObjectIdReader() { return null; }
+    public ObjectIdReader getObjectIdReader(DeserializationContext ctxt) { return null; }
 
     /**
      * Method needed by {@link BeanDeserializerFactory} to properly link
      * managed- and back-reference pairs.
-     * 
-     * @since 2.2 (was moved out of <code>BeanDeserializerBase</code>)
      */
     public SettableBeanProperty findBackReference(String refName)
     {
-        throw new IllegalArgumentException("Can not handle managed/back reference '"+refName
+        throw new IllegalArgumentException("Cannot handle managed/back reference '"+refName
                 +"': type: value deserializer of type "+getClass().getName()+" does not support them");
     }
 
-    /*
-    /**********************************************************
-    /* Deprecated methods
-    /**********************************************************
-     */
-
     /**
-     * @deprecated Since 2.6 Use overloaded variant that takes context argument
+     * Introspection method that may be called to see whether deserializer supports
+     * update of an existing value (aka "merging") or not. Return value should either
+     * be {@link Boolean#FALSE} if update is not supported at all (immutable values);
+     * {@link Boolean#TRUE} if update should usually work (regular POJOs, for example),
+     * or <code>null</code> if this is either not known, or may sometimes work.
+     *<p>
+     * Information gathered is typically used to either prevent merging update for
+     * property (either by skipping, if based on global defaults; or by exception during
+     * deserialization construction if explicit attempt made) if {@link Boolean#FALSE}
+     * returned, or inclusion if {@link Boolean#TRUE} is specified. If "unknown" case
+     * (<code>null</code> returned) behavior is to exclude property if global defaults
+     * used; or to allow if explicit per-type or property merging is defined.
+     *<p>
+     * Default implementation returns <code>null</code> to allow explicit per-type
+     * or per-property attempts.
      */
-    @Deprecated
-    public T getNullValue() { return null; }
+    public Boolean supportsUpdate(DeserializationConfig config) {
+        return null;
+    }
 
-    /**
-     * @deprecated Since 2.6 Use overloaded variant that takes context argument
-     */
-    @Deprecated
-    public T getEmptyValue() { return getNullValue(); }
-    
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Helper classes
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**

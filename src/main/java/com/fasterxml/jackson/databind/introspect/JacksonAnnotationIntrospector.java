@@ -2,23 +2,26 @@ package com.fasterxml.jackson.databind.introspect;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
+import java.lang.reflect.MalformedParametersException;
+import java.lang.reflect.Parameter;
 import java.util.*;
 
 import com.fasterxml.jackson.annotation.*;
+
 import com.fasterxml.jackson.core.Version;
+
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.*;
 import com.fasterxml.jackson.databind.cfg.HandlerInstantiator;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
-import com.fasterxml.jackson.databind.ext.Java7Support;
+import com.fasterxml.jackson.databind.ext.beans.JavaBeansAnnotations;
 import com.fasterxml.jackson.databind.jsontype.NamedType;
-import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
-import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
-import com.fasterxml.jackson.databind.jsontype.impl.StdTypeResolverBuilder;
 import com.fasterxml.jackson.databind.ser.BeanPropertyWriter;
 import com.fasterxml.jackson.databind.ser.VirtualBeanPropertyWriter;
 import com.fasterxml.jackson.databind.ser.impl.AttributePropertyWriter;
 import com.fasterxml.jackson.databind.ser.std.RawSerializer;
+import com.fasterxml.jackson.databind.type.MapLikeType;
+import com.fasterxml.jackson.databind.type.TypeFactory;
 import com.fasterxml.jackson.databind.util.*;
 
 /**
@@ -53,35 +56,34 @@ public class JacksonAnnotationIntrospector
         JsonTypeInfo.class,
         JsonUnwrapped.class,
         JsonBackReference.class,
-        JsonManagedReference.class
+        JsonManagedReference.class,
+        JsonMerge.class // since 2.9
     };
 
-    // NOTE: loading of Java7 dependencies is encapsulated by handlers in Java7Support,
-    //  here we do not really need any handling; but for extra-safety use try-catch
-    private static final Java7Support _java7Helper;
+    // NOTE: To avoid mandatory Module dependency to "java.beans", support for 2
+    // annotations is done dynamically.
+    private static final JavaBeansAnnotations _javaBeansHelper;
     static {
-        Java7Support x = null;
+        JavaBeansAnnotations x = null;
         try {
-            x = Java7Support.instance();
+            x = JavaBeansAnnotations.instance();
         } catch (Throwable t) { }
-        _java7Helper = x;
+        _javaBeansHelper = x;
     }
-    
+
     /**
      * Since introspection of annotation types is a performance issue in some
      * use cases (rare, but do exist), let's try a simple cache to reduce
      * need for actual meta-annotation introspection.
      *<p>
      * Non-final only because it needs to be re-created after deserialization.
-     *
-     * @since 2.7
      */
-    protected transient LRUMap<Class<?>,Boolean> _annotationsInside = new LRUMap<Class<?>,Boolean>(48, 48);
+    protected transient LookupCache<Class<?>,Boolean> _annotationsInside = new SimpleLookupCache<Class<?>,Boolean>(48, 96);
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Local configuration settings
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -89,15 +91,13 @@ public class JacksonAnnotationIntrospector
      * explanation.
      *<p>
      * Defaults to true.
-     * 
-     * @since 2.7.4
      */
     protected boolean _cfgConstructorPropertiesImpliesCreator = true;
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
      */
 
     public JacksonAnnotationIntrospector() { }
@@ -109,15 +109,15 @@ public class JacksonAnnotationIntrospector
 
     protected Object readResolve() {
         if (_annotationsInside == null) {
-            _annotationsInside = new LRUMap<Class<?>,Boolean>(48, 48);
+            _annotationsInside = new SimpleLookupCache<Class<?>,Boolean>(48, 48);
         }
         return this;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Configuration
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -127,8 +127,6 @@ public class JacksonAnnotationIntrospector
      * without explicit use of <code>JsonCreator</code> annotation.
      *<p>
      * Default setting is `true`
-     *
-     * @since 2.7.4
      */
     public JacksonAnnotationIntrospector setConstructorPropertiesImpliesCreator(boolean b)
     {
@@ -137,9 +135,9 @@ public class JacksonAnnotationIntrospector
     }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* General annotation properties
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -162,46 +160,16 @@ public class JacksonAnnotationIntrospector
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* General annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
-    /**
-     * Since 2.6, we have supported use of {@link JsonProperty} for specifying
-     * explicit serialized name
-     */
     @Override
-    @Deprecated
-    public String findEnumValue(Enum<?> value)
-    {
-        // 11-Jun-2015, tatu: As per [databind#677], need to allow explicit naming.
-        //   Unfortunately can not quite use standard AnnotatedClass here (due to various
-        //   reasons, including odd representation JVM uses); has to do for now
-        try {
-            // We know that values are actually static fields with matching name so:
-            Field f = value.getClass().getField(value.name());
-            if (f != null) {
-                JsonProperty prop = f.getAnnotation(JsonProperty.class);
-                if (prop != null) {
-                    String n = prop.value();
-                    if (n != null && !n.isEmpty()) {
-                        return n;
-                    }
-                }
-            }
-        } catch (SecurityException e) {
-            // 17-Sep-2015, tatu: Anything we could/should do here?
-        } catch (NoSuchFieldException e) {
-            // 17-Sep-2015, tatu: should not really happen. But... can we do anything?
-        }
-        return value.name();
-    }
-
-    @Override // since 2.7
-    public String[] findEnumValues(Class<?> enumType, Enum<?>[] enumValues, String[] names) {
+    public String[] findEnumValues(MapperConfig<?> config,
+            Class<?> enumType, Enum<?>[] enumValues, String[] names) {
         HashMap<String,String> expl = null;
-        for (Field f : ClassUtil.getDeclaredFields(enumType)) {
+        for (Field f : enumType.getDeclaredFields()) {
             if (!f.isEnumConstant()) {
                 continue;
             }
@@ -231,6 +199,31 @@ public class JacksonAnnotationIntrospector
         return names;
     }
 
+    @Override
+    public void findEnumAliases(MapperConfig<?> config,
+            Class<?> enumType, Enum<?>[] enumValues, String[][] aliasList)
+    {
+        // Main complication: discrepancy between Field that represent enum value,
+        // Enum abstraction; joint by name but not reference
+        for (Field f : enumType.getDeclaredFields()) {
+            if (f.isEnumConstant()) {
+                JsonAlias aliasAnnotation = f.getAnnotation(JsonAlias.class);
+                if (aliasAnnotation != null) {
+                    String[] aliases = aliasAnnotation.value();
+                    if (aliases.length != 0) {
+                        final String name = f.getName();
+                        // Find matching enum (could create Ma
+                        for (int i = 0, end = enumValues.length; i < end; ++i) {
+                            if (name.equals(enumValues[i].name())) {
+                                aliasList[i] = aliases;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * Finds the Enum value that should be considered the default value, if possible.
      * <p>
@@ -241,18 +234,18 @@ public class JacksonAnnotationIntrospector
      * @since 2.8
      */
     @Override
-    public Enum<?> findDefaultEnumValue(Class<Enum<?>> enumCls) {
+    public Enum<?> findDefaultEnumValue(MapperConfig<?> config, Class<Enum<?>> enumCls) {
         return ClassUtil.findFirstAnnotatedEnumValue(enumCls, JsonEnumDefaultValue.class);
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* General class annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
-    public PropertyName findRootName(AnnotatedClass ac)
+    public PropertyName findRootName(MapperConfig<?> config, AnnotatedClass ac)
     {
         JsonRootName ann = _findAnnotation(ac, JsonRootName.class);
         if (ann == null) {
@@ -265,53 +258,34 @@ public class JacksonAnnotationIntrospector
         return PropertyName.construct(ann.value(), ns);
     }
 
-    @Override // since 2.8
-    public JsonIgnoreProperties.Value findPropertyIgnorals(Annotated a)
-    {
-        JsonIgnoreProperties v = _findAnnotation(a, JsonIgnoreProperties.class);
-        if (v == null) {
-            // could alternatively return `Value.empty()`?
-            return null;
-        }
-        return JsonIgnoreProperties.Value.from(v);
-    }
-    
-    @Override // since 2.6
-    @Deprecated // since 2.8
-    public String[] findPropertiesToIgnore(Annotated a, boolean forSerialization) {
-        JsonIgnoreProperties.Value v = findPropertyIgnorals(a);
-        if (v == null) {
-            return null;
-        }
-        // 13-May-2015, tatu: As per [databind#95], allow read-only/write-only props
-        if (forSerialization) {
-            if (v.getAllowGetters()) {
-                return null;
-            }
-        } else {
-            if (v.getAllowSetters()) {
-                return null;
-            }
-        }
-        Set<String> ignored = v.getIgnored();
-        return ignored.toArray(new String[ignored.size()]);
-    }
-
     @Override
-    @Deprecated // since 2.8
-    public Boolean findIgnoreUnknownProperties(AnnotatedClass a) {
-        JsonIgnoreProperties.Value v = findPropertyIgnorals(a);
-        return (v == null) ? null : v.getIgnoreUnknown();
-    }
-
-    @Override
-    public Boolean isIgnorableType(AnnotatedClass ac) {
+    public Boolean isIgnorableType(MapperConfig<?> config, AnnotatedClass ac) {
         JsonIgnoreType ignore = _findAnnotation(ac, JsonIgnoreType.class);
         return (ignore == null) ? null : ignore.value();
     }
+
+    @Override
+    public JsonIgnoreProperties.Value findPropertyIgnoralByName(MapperConfig<?> config, Annotated a)
+    {
+        JsonIgnoreProperties v = _findAnnotation(a, JsonIgnoreProperties.class);
+        if (v == null) {
+            return JsonIgnoreProperties.Value.empty();
+        }
+        return JsonIgnoreProperties.Value.from(v);
+    }
+
+    @Override
+    public JsonIncludeProperties.Value findPropertyInclusionByName(MapperConfig<?> config, Annotated a)
+    {
+        JsonIncludeProperties v = _findAnnotation(a, JsonIncludeProperties.class);
+        if (v == null) {
+            return JsonIncludeProperties.Value.all();
+        }
+        return JsonIncludeProperties.Value.from(v);
+    }
  
     @Override
-    public Object findFilterId(Annotated a) {
+    public Object findFilterId(MapperConfig<?> config, Annotated a) {
         JsonFilter ann = _findAnnotation(a, JsonFilter.class);
         if (ann != null) {
             String id = ann.value();
@@ -324,51 +298,113 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Object findNamingStrategy(AnnotatedClass ac)
+    public Object findNamingStrategy(MapperConfig<?> config, AnnotatedClass ac)
     {
         JsonNaming ann = _findAnnotation(ac, JsonNaming.class);
         return (ann == null) ? null : ann.value();
     }
 
     @Override
-    public String findClassDescription(AnnotatedClass ac) {
+    public String findClassDescription(MapperConfig<?> config, AnnotatedClass ac) {
         JsonClassDescription ann = _findAnnotation(ac, JsonClassDescription.class);
         return (ann == null) ? null : ann.value();
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Property auto-detection
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
-    public VisibilityChecker<?> findAutoDetectVisibility(AnnotatedClass ac,
-        VisibilityChecker<?> checker)
+    public VisibilityChecker findAutoDetectVisibility(MapperConfig<?> config,
+            AnnotatedClass ac, VisibilityChecker checker)
     {
         JsonAutoDetect ann = _findAnnotation(ac, JsonAutoDetect.class);
-        return (ann == null) ? checker : checker.with(ann);
+        if (ann == null) {
+            return checker;
+        }
+        return checker.withOverrides(JsonAutoDetect.Value.from(ann));
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* General member (field, method/constructor) annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
-    public String findImplicitPropertyName(AnnotatedMember m) {
-        PropertyName n = _findConstructorName(m);
-        return (n == null) ? null : n.getSimpleName();
+    public String findImplicitPropertyName(MapperConfig<?> config, AnnotatedMember m)
+    {
+        // Always get name for fields so why not
+        if (m instanceof AnnotatedField) {
+            return m.getName();
+        }
+        if (m instanceof AnnotatedParameter) {
+            AnnotatedParameter p = (AnnotatedParameter) m;
+            AnnotatedWithParams owner = p.getOwner();
+            if (owner instanceof AnnotatedConstructor) {
+                if (_javaBeansHelper != null) {
+                    PropertyName name = _javaBeansHelper.findConstructorName(p);
+                    if (name != null) {
+                        return name.getSimpleName();
+                    }
+                }
+                // ... or parameter names from bytecode (JDK8)
+                return _findImplicitName(owner, p.getIndex());
+            }
+            if (owner instanceof AnnotatedMethod) {
+                // For now let's only bother discovering names for static methods as they
+                // (only) may be creators
+                if (owner.isStatic()) {
+                    return _findImplicitName(owner, p.getIndex());
+                }
+            }
+        }
+        return null;
     }
-    
+
+    protected String _findImplicitName(AnnotatedWithParams m, int index)
+    {
+        try {
+            Parameter[] params = m.getNativeParameters();
+            Parameter p = params[index];
+            if (p.isNamePresent()) {
+                return p.getName();
+            }
+        } catch (MalformedParametersException e) {
+            // 17-Sep-2017, tatu: I don't usually add defensive handling like this without
+            //    having clear examples of problems, but this seems like something that
+            //    can still crop up unexpectedly and be a PITA so...
+        }
+        return null;
+    }
+
     @Override
-    public boolean hasIgnoreMarker(AnnotatedMember m) {
+    public List<PropertyName> findPropertyAliases(MapperConfig<?> config, Annotated m) {
+        JsonAlias ann = _findAnnotation(m, JsonAlias.class);
+        if (ann == null) {
+            return null;
+        }
+        String[] strs = ann.value();
+        final int len = strs.length;
+        if (len == 0) {
+            return Collections.emptyList();
+        }
+        List<PropertyName> result = new ArrayList<>(len);
+        for (int i = 0; i < len; ++i) {
+            result.add(PropertyName.construct(strs[i]));
+        }
+        return result;
+    }
+
+    @Override
+    public boolean hasIgnoreMarker(MapperConfig<?> config, AnnotatedMember m) {
         return _isIgnorable(m);
     }
 
     @Override
-    public Boolean hasRequiredMarker(AnnotatedMember m)
+    public Boolean hasRequiredMarker(MapperConfig<?> config, AnnotatedMember m)
     {
         JsonProperty ann = _findAnnotation(m, JsonProperty.class);
         if (ann != null) {
@@ -378,7 +414,7 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public JsonProperty.Access findPropertyAccess(Annotated m) {
+    public JsonProperty.Access findPropertyAccess(MapperConfig<?> config, Annotated m) {
         JsonProperty ann = _findAnnotation(m, JsonProperty.class);
         if (ann != null) {
             return ann.access();
@@ -387,25 +423,25 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public String findPropertyDescription(Annotated ann) {
+    public String findPropertyDescription(MapperConfig<?> config, Annotated ann) {
         JsonPropertyDescription desc = _findAnnotation(ann, JsonPropertyDescription.class);
         return (desc == null) ? null : desc.value();
     }
 
     @Override
-    public Integer findPropertyIndex(Annotated ann) {
+    public Integer findPropertyIndex(MapperConfig<?> config, Annotated ann) {
         JsonProperty prop = _findAnnotation(ann, JsonProperty.class);
         if (prop != null) {
-          int ix = prop.index();
-          if (ix != JsonProperty.INDEX_UNKNOWN) {
-               return Integer.valueOf(ix);
-          }
+            int ix = prop.index();
+            if (ix != JsonProperty.INDEX_UNKNOWN) {
+                return Integer.valueOf(ix);
+            }
         }
         return null;
     }
     
     @Override
-    public String findPropertyDefaultValue(Annotated ann) {
+    public String findPropertyDefaultValue(MapperConfig<?> config, Annotated ann) {
         JsonProperty prop = _findAnnotation(ann, JsonProperty.class);
         if (prop == null) {
             return null;
@@ -416,13 +452,15 @@ public class JacksonAnnotationIntrospector
     }
     
     @Override
-    public JsonFormat.Value findFormat(Annotated ann) {
+    public JsonFormat.Value findFormat(MapperConfig<?> config, Annotated ann) {
         JsonFormat f = _findAnnotation(ann, JsonFormat.class);
-        return (f == null)  ? null : new JsonFormat.Value(f);
+        // NOTE: could also just call `JsonFormat.Value.from()` with `null`
+        // too, but that returns "empty" instance
+        return (f == null)  ? null : JsonFormat.Value.from(f);
     }
 
     @Override        
-    public ReferenceProperty findReferenceType(AnnotatedMember member)
+    public ReferenceProperty findReferenceType(MapperConfig<?> config, AnnotatedMember member)
     {
         JsonManagedReference ref1 = _findAnnotation(member, JsonManagedReference.class);
         if (ref1 != null) {
@@ -436,7 +474,7 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public NameTransformer findUnwrappingNameTransformer(AnnotatedMember member)
+    public NameTransformer findUnwrappingNameTransformer(MapperConfig<?> config, AnnotatedMember member)
     {
         JsonUnwrapped ann = _findAnnotation(member, JsonUnwrapped.class);
         // if not enabled, just means annotation is not enabled; not necessarily
@@ -449,39 +487,40 @@ public class JacksonAnnotationIntrospector
         return NameTransformer.simpleTransformer(prefix, suffix);
     }
 
-    @Override
-    public Object findInjectableValueId(AnnotatedMember m)
-    {
+    @Override // since 2.9
+    public JacksonInject.Value findInjectableValue(MapperConfig<?> config, AnnotatedMember m) {
         JacksonInject ann = _findAnnotation(m, JacksonInject.class);
         if (ann == null) {
             return null;
         }
-        /* Empty String means that we should use name of declared
-         * value class.
-         */
-        String id = ann.value();
-        if (id.length() == 0) {
+        // Empty String means that we should use name of declared value class.
+        JacksonInject.Value v = JacksonInject.Value.from(ann);
+        if (!v.hasId()) {
+            Object id;
             // slight complication; for setters, type 
             if (!(m instanceof AnnotatedMethod)) {
-                return m.getRawType().getName();
+                id = m.getRawType().getName();
+            } else {
+                AnnotatedMethod am = (AnnotatedMethod) m;
+                if (am.getParameterCount() == 0) { // getter
+                    id = m.getRawType().getName();
+                } else { // setter
+                    id = am.getRawParameterType(0).getName();
+                }
             }
-            AnnotatedMethod am = (AnnotatedMethod) m;
-            if (am.getParameterCount() == 0) {
-                return m.getRawType().getName();
-            }
-            return am.getRawParameterType(0).getName();
+            v = v.withId(id);
         }
-        return id;
+        return v;
     }
 
     @Override
-    public Class<?>[] findViews(Annotated a)
+    public Class<?>[] findViews(MapperConfig<?> config, Annotated a)
     {
         JsonView ann = _findAnnotation(a, JsonView.class);
         return (ann == null) ? null : ann.value();
     }
 
-    @Override // since 2.7
+    @Override
     public AnnotatedMethod resolveSetterConflict(MapperConfig<?> config,
             AnnotatedMethod setter1, AnnotatedMethod setter2)
     {
@@ -509,49 +548,71 @@ public class JacksonAnnotationIntrospector
         return null;
     }
 
+    @Override // since 2.11
+    public PropertyName findRenameByField(MapperConfig<?> config,
+            AnnotatedField f, PropertyName implName) {
+        // Nothing to report, only used by modules. But define just as documentation
+        return null;
+    }
+    
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Annotations for Polymorphic Type handling
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
-    public TypeResolverBuilder<?> findTypeResolver(MapperConfig<?> config,
-            AnnotatedClass ac, JavaType baseType)
+    public JsonTypeInfo.Value findPolymorphicTypeInfo(MapperConfig<?> config,
+            Annotated ann)
     {
-        return _findTypeResolver(config, ac, baseType);
+        JsonTypeInfo t = _findAnnotation(ann, JsonTypeInfo.class);
+        return (t == null) ? null : JsonTypeInfo.Value.from(t);
     }
 
     @Override
+    public Object findTypeResolverBuilder(MapperConfig<?> config,
+            Annotated ann) {
+        JsonTypeResolver a = _findAnnotation(ann, JsonTypeResolver.class);
+        return (a == null) ? a : a.value();
+    }
+
+    @Override
+    public Object findTypeIdResolver(MapperConfig<?> config, Annotated ann) {
+        JsonTypeIdResolver a = _findAnnotation(ann, JsonTypeIdResolver.class);
+        return (a == null) ? a : a.value();
+    }
+
+    /*
+    @Override
     public TypeResolverBuilder<?> findPropertyTypeResolver(MapperConfig<?> config,
-            AnnotatedMember am, JavaType baseType)
+            Annotated ann, JavaType baseType, JsonTypeInfo.Value typeInfo)
     {
-        /* As per definition of @JsonTypeInfo, should only apply to contents of container
-         * (collection, map) types, not container types themselves:
-         */
-        // 17-Apr-2016, tatu: For 2.7.4 make sure ReferenceType also included
+        // As per definition of @JsonTypeInfo, should only apply to contents of container
+        // (collection, map) types, not container types themselves:
         if (baseType.isContainerType() || baseType.isReferenceType()) {
             return null;
         }
         // No per-member type overrides (yet)
-        return _findTypeResolver(config, am, baseType);
+        return _findTypeResolver(config, ann, baseType, typeInfo);
     }
+    */
 
+    /*
     @Override
     public TypeResolverBuilder<?> findPropertyContentTypeResolver(MapperConfig<?> config,
-            AnnotatedMember am, JavaType containerType)
+            Annotated ann, JavaType containerType, JsonTypeInfo.Value typeInfo)
     {
-        /* First: let's ensure property is a container type: caller should have
-         * verified but just to be sure
-         */
+        // First: let's ensure property is a container type: caller should have
+        // verified but just to be sure
         if (containerType.getContentType() == null) {
             throw new IllegalArgumentException("Must call method with a container or reference type (got "+containerType+")");
         }
-        return _findTypeResolver(config, am, containerType);
+        return _findTypeResolver(config, ann, containerType, typeInfo);
     }
-    
+    */
+
     @Override
-    public List<NamedType> findSubtypes(Annotated a)
+    public List<NamedType> findSubtypes(MapperConfig<?> config, Annotated a)
     {
         JsonSubTypes t = _findAnnotation(a, JsonSubTypes.class);
         if (t == null) return null;
@@ -559,19 +620,23 @@ public class JacksonAnnotationIntrospector
         ArrayList<NamedType> result = new ArrayList<NamedType>(types.length);
         for (JsonSubTypes.Type type : types) {
             result.add(new NamedType(type.value(), type.name()));
+            // [databind#2761]: alternative set of names to use
+            for (String name : type.names()) {
+                result.add(new NamedType(type.value(), name));
+            }
         }
         return result;
     }
 
     @Override        
-    public String findTypeName(AnnotatedClass ac)
+    public String findTypeName(MapperConfig<?> config, AnnotatedClass ac)
     {
         JsonTypeName tn = _findAnnotation(ac, JsonTypeName.class);
         return (tn == null) ? null : tn.value();
     }
 
     @Override
-    public Boolean isTypeId(AnnotatedMember member) {
+    public Boolean isTypeId(MapperConfig<?> config, AnnotatedMember member) {
         return _hasAnnotation(member, JsonTypeId.class);
     }
 
@@ -582,7 +647,7 @@ public class JacksonAnnotationIntrospector
      */
 
     @Override
-    public ObjectIdInfo findObjectIdInfo(Annotated ann) {
+    public ObjectIdInfo findObjectIdInfo(MapperConfig<?> config, Annotated ann) {
         JsonIdentityInfo info = _findAnnotation(ann, JsonIdentityInfo.class);
         if (info == null || info.generator() == ObjectIdGenerators.None.class) {
             return null;
@@ -593,7 +658,8 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public ObjectIdInfo findObjectReferenceInfo(Annotated ann, ObjectIdInfo objectIdInfo) {
+    public ObjectIdInfo findObjectReferenceInfo(MapperConfig<?> config, 
+            Annotated ann, ObjectIdInfo objectIdInfo) {
         JsonIdentityReference ref = _findAnnotation(ann, JsonIdentityReference.class);
         if (ref == null) {
             return objectIdInfo;
@@ -611,7 +677,7 @@ public class JacksonAnnotationIntrospector
     */
 
     @Override
-    public Object findSerializer(Annotated a)
+    public Object findSerializer(MapperConfig<?> config, Annotated a)
     {
         JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
         if (ann != null) {
@@ -636,7 +702,7 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Object findKeySerializer(Annotated a)
+    public Object findKeySerializer(MapperConfig<?> config, Annotated a)
     {
         JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
         if (ann != null) {
@@ -650,7 +716,7 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Object findContentSerializer(Annotated a)
+    public Object findContentSerializer(MapperConfig<?> config, Annotated a)
     {
         JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
         if (ann != null) {
@@ -664,7 +730,7 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Object findNullSerializer(Annotated a)
+    public Object findNullSerializer(MapperConfig<?> config, Annotated a)
     {
         JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
         if (ann != null) {
@@ -678,122 +744,154 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    @SuppressWarnings("deprecation")
-    public JsonInclude.Include findSerializationInclusion(Annotated a, JsonInclude.Include defValue)
+    public JsonInclude.Value findPropertyInclusion(MapperConfig<?> config, Annotated a)
     {
         JsonInclude inc = _findAnnotation(a, JsonInclude.class);
-        if (inc != null) {
-            JsonInclude.Include v = inc.value();
-            if (v != JsonInclude.Include.USE_DEFAULTS) {
-                return v;
-            }
-        }
-        JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
-        if (ann != null) {
-            JsonSerialize.Inclusion i2 = ann.include();
-            switch (i2) {
-            case ALWAYS:
-                return JsonInclude.Include.ALWAYS;
-            case NON_NULL:
-                return JsonInclude.Include.NON_NULL;
-            case NON_DEFAULT:
-                return JsonInclude.Include.NON_DEFAULT;
-            case NON_EMPTY:
-                return JsonInclude.Include.NON_EMPTY;
-            case DEFAULT_INCLUSION: // since 2.3 -- fall through, use default
-                break;
-            }
-        }
-        return defValue;
+        JsonInclude.Value value = (inc == null) ? JsonInclude.Value.empty() : JsonInclude.Value.from(inc);
+        return value;
     }
 
     @Override
-    @Deprecated
-    public JsonInclude.Include findSerializationInclusionForContent(Annotated a, JsonInclude.Include defValue)
-    {
-        JsonInclude inc = _findAnnotation(a, JsonInclude.class);
-        if (inc != null) {
-            JsonInclude.Include incl = inc.content();
-            if (incl != JsonInclude.Include.USE_DEFAULTS) {
-                return incl;
-            }
-        }
-        return defValue;
-    }
-
-    @Override
-    @SuppressWarnings("deprecation")
-    public JsonInclude.Value findPropertyInclusion(Annotated a)
-    {
-        JsonInclude inc = _findAnnotation(a, JsonInclude.class);
-        JsonInclude.Include valueIncl = (inc == null) ? JsonInclude.Include.USE_DEFAULTS : inc.value();
-        if (valueIncl == JsonInclude.Include.USE_DEFAULTS) {
-            JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
-            if (ann != null) {
-                JsonSerialize.Inclusion i2 = ann.include();
-                switch (i2) {
-                case ALWAYS:
-                    valueIncl = JsonInclude.Include.ALWAYS;
-                    break;
-                case NON_NULL:
-                    valueIncl = JsonInclude.Include.NON_NULL;
-                    break;
-                case NON_DEFAULT:
-                    valueIncl = JsonInclude.Include.NON_DEFAULT;
-                    break;
-                case NON_EMPTY:
-                    valueIncl = JsonInclude.Include.NON_EMPTY;
-                    break;
-                case DEFAULT_INCLUSION:
-                default:
-                }
-            }
-        }
-        JsonInclude.Include contentIncl = (inc == null) ? JsonInclude.Include.USE_DEFAULTS : inc.content();
-        return JsonInclude.Value.construct(valueIncl, contentIncl);
-    }
-
-    @Override
-    @Deprecated
-    public Class<?> findSerializationType(Annotated am)
-    {
-        JsonSerialize ann = _findAnnotation(am, JsonSerialize.class);
-        return (ann == null) ? null : _classIfExplicit(ann.as());
-    }
-
-    @Override
-    @Deprecated
-    public Class<?> findSerializationKeyType(Annotated am, JavaType baseType)
-    {
-        JsonSerialize ann = _findAnnotation(am, JsonSerialize.class);
-        return (ann == null) ? null : _classIfExplicit(ann.keyAs());
-    }
-
-    @Override
-    @Deprecated
-    public Class<?> findSerializationContentType(Annotated am, JavaType baseType)
-    {
-        JsonSerialize ann = _findAnnotation(am, JsonSerialize.class);
-        return (ann == null) ? null : _classIfExplicit(ann.contentAs());
-    }
-    
-    @Override
-    public JsonSerialize.Typing findSerializationTyping(Annotated a)
+    public JsonSerialize.Typing findSerializationTyping(MapperConfig<?> config, Annotated a)
     {
         JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
         return (ann == null) ? null : ann.typing();
     }
 
     @Override
-    public Object findSerializationConverter(Annotated a) {
+    public Object findSerializationConverter(MapperConfig<?> config, Annotated a) {
         JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
         return (ann == null) ? null : _classIfExplicit(ann.converter(), Converter.None.class);
     }
 
     @Override
-    public Object findSerializationContentConverter(AnnotatedMember a) {
+    public Object findSerializationContentConverter(MapperConfig<?> config, AnnotatedMember a) {
         JsonSerialize ann = _findAnnotation(a, JsonSerialize.class);
         return (ann == null) ? null : _classIfExplicit(ann.contentConverter(), Converter.None.class);
+    }
+
+    /*
+    /**********************************************************
+    /* Serialization: type refinements
+    /**********************************************************
+     */
+
+    @Override
+    public JavaType refineSerializationType(final MapperConfig<?> config,
+            final Annotated a, final JavaType baseType) throws JsonMappingException
+    {
+        JavaType type = baseType;
+        final TypeFactory tf = config.getTypeFactory();
+
+        final JsonSerialize jsonSer = _findAnnotation(a, JsonSerialize.class);
+        
+        // Ok: start by refining the main type itself; common to all types
+
+        final Class<?> serClass = (jsonSer == null) ? null : _classIfExplicit(jsonSer.as());
+        if (serClass != null) {
+            if (type.hasRawClass(serClass)) {
+                // 30-Nov-2015, tatu: As per [databind#1023], need to allow forcing of
+                //    static typing this way
+                type = type.withStaticTyping();
+            } else {
+                Class<?> currRaw = type.getRawClass();
+                try {
+                    // 11-Oct-2015, tatu: For deser, we call `TypeFactory.constructSpecializedType()`,
+                    //   may be needed here too in future?
+                    if (serClass.isAssignableFrom(currRaw)) { // common case
+                        type = tf.constructGeneralizedType(type, serClass);
+                    } else if (currRaw.isAssignableFrom(serClass)) { // specialization, ok as well
+                        type = tf.constructSpecializedType(type, serClass);
+                    } else if (_primitiveAndWrapper(currRaw, serClass)) {
+                        // 27-Apr-2017, tatu: [databind#1592] ignore primitive<->wrapper refinements
+                        type = type.withStaticTyping();
+                    } else {
+                        throw new JsonMappingException(null,
+                                String.format("Cannot refine serialization type %s into %s; types not related",
+                                        type, serClass.getName()));
+                    }
+                } catch (IllegalArgumentException iae) {
+                    throw new JsonMappingException(null,
+                            String.format("Failed to widen type %s with annotation (value %s), from '%s': %s",
+                                    type, serClass.getName(), a.getName(), iae.getMessage()),
+                                    iae);
+                }
+            }
+        }
+        // Then further processing for container types
+
+        // First, key type (for Maps, Map-like types):
+        if (type.isMapLikeType()) {
+            JavaType keyType = type.getKeyType();
+            final Class<?> keyClass = (jsonSer == null) ? null : _classIfExplicit(jsonSer.keyAs());
+            if (keyClass != null) {
+                if (keyType.hasRawClass(keyClass)) {
+                    keyType = keyType.withStaticTyping();
+                } else {
+                    Class<?> currRaw = keyType.getRawClass();
+                    try {
+                        // 19-May-2016, tatu: As per [databind#1231], [databind#1178] may need to actually
+                        //   specialize (narrow) type sometimes, even if more commonly opposite
+                        //   is needed.
+                        if (keyClass.isAssignableFrom(currRaw)) { // common case
+                            keyType = tf.constructGeneralizedType(keyType, keyClass);
+                        } else if (currRaw.isAssignableFrom(keyClass)) { // specialization, ok as well
+                            keyType = tf.constructSpecializedType(keyType, keyClass);
+                        } else if (_primitiveAndWrapper(currRaw, keyClass)) {
+                            // 27-Apr-2017, tatu: [databind#1592] ignore primitive<->wrapper refinements
+                            keyType = keyType.withStaticTyping();
+                        } else {
+                            throw new JsonMappingException(null,
+                                    String.format("Cannot refine serialization key type %s into %s; types not related",
+                                            keyType, keyClass.getName()));
+                        }
+                    } catch (IllegalArgumentException iae) {
+                        throw new JsonMappingException(null,
+                                String.format("Failed to widen key type of %s with concrete-type annotation (value %s), from '%s': %s",
+                                        type, keyClass.getName(), a.getName(), iae.getMessage()),
+                                        iae);
+                    }
+                }
+                type = ((MapLikeType) type).withKeyType(keyType);
+            }
+        }
+
+        JavaType contentType = type.getContentType();
+        if (contentType != null) { // collection[like], map[like], array, reference
+            // And then value types for all containers:
+           final Class<?> contentClass = (jsonSer == null) ? null : _classIfExplicit(jsonSer.contentAs());
+           if (contentClass != null) {
+               if (contentType.hasRawClass(contentClass)) {
+                   contentType = contentType.withStaticTyping();
+               } else {
+                   // 03-Apr-2016, tatu: As per [databind#1178], may need to actually
+                   //   specialize (narrow) type sometimes, even if more commonly opposite
+                   //   is needed.
+                   Class<?> currRaw = contentType.getRawClass();
+                   try {
+                       if (contentClass.isAssignableFrom(currRaw)) { // common case
+                           contentType = tf.constructGeneralizedType(contentType, contentClass);
+                       } else if (currRaw.isAssignableFrom(contentClass)) { // specialization, ok as well
+                           contentType = tf.constructSpecializedType(contentType, contentClass);
+                       } else if (_primitiveAndWrapper(currRaw, contentClass)) {
+                           // 27-Apr-2017, tatu: [databind#1592] ignore primitive<->wrapper refinements
+                           contentType = contentType.withStaticTyping();
+                       } else {
+                           throw new JsonMappingException(null,
+                                   String.format("Cannot refine serialization content type %s into %s; types not related",
+                                           contentType, contentClass.getName()));
+                       }
+                   } catch (IllegalArgumentException iae) { // shouldn't really happen
+                       throw new JsonMappingException(null,
+                               String.format("Internal error: failed to refine value type of %s with concrete-type annotation (value %s), from '%s': %s",
+                                       type, contentClass.getName(), a.getName(), iae.getMessage()),
+                                       iae);
+                   }
+               }
+               type = type.withContentType(contentType);
+           }
+        }
+        return type;
     }
 
     /*
@@ -803,21 +901,20 @@ public class JacksonAnnotationIntrospector
      */
 
     @Override
-    public String[] findSerializationPropertyOrder(AnnotatedClass ac) {
+    public String[] findSerializationPropertyOrder(MapperConfig<?> config, AnnotatedClass ac) {
         JsonPropertyOrder order = _findAnnotation(ac, JsonPropertyOrder.class);
         return (order == null) ? null : order.value();
     }
 
     @Override
-    public Boolean findSerializationSortAlphabetically(Annotated ann) {
+    public Boolean findSerializationSortAlphabetically(MapperConfig<?> config, Annotated ann) {
         return _findSortAlpha(ann);
     }
 
     private final Boolean _findSortAlpha(Annotated ann) {
         JsonPropertyOrder order = _findAnnotation(ann, JsonPropertyOrder.class);
-        /* 23-Jun-2015, tatu: as per [databind#840], let's only consider
-         *  `true` to have any significance.
-         */
+        // 23-Jun-2015, tatu: as per [databind#840], let's only consider
+        //  `true` to have any significance.
         if ((order != null) && order.alphabetic()) {
             return Boolean.TRUE;
         }
@@ -921,27 +1018,44 @@ public class JacksonAnnotationIntrospector
      */
 
     @Override
-    public PropertyName findNameForSerialization(Annotated a)
+    public PropertyName findNameForSerialization(MapperConfig<?> config, Annotated a)
     {
+        boolean useDefault = false;
         JsonGetter jg = _findAnnotation(a, JsonGetter.class);
         if (jg != null) {
-            return PropertyName.construct(jg.value());
+            String s = jg.value();
+            // 04-May-2018, tatu: Should allow for "nameless" `@JsonGetter` too
+            if (!s.isEmpty()) {
+                return PropertyName.construct(s);
+            }
+            useDefault = true;
         }
         JsonProperty pann = _findAnnotation(a, JsonProperty.class);
         if (pann != null) {
             return PropertyName.construct(pann.value());
         }
-        if (_hasOneOf(a, ANNOTATIONS_TO_INFER_SER)) {
+        if (useDefault || _hasOneOf(a, ANNOTATIONS_TO_INFER_SER)) {
             return PropertyName.USE_DEFAULT;
         }
         return null;
     }
 
     @Override
-    public boolean hasAsValueAnnotation(AnnotatedMethod am) {
-        JsonValue ann = _findAnnotation(am, JsonValue.class);
-        // value of 'false' means disabled...
-        return (ann != null && ann.value());
+    public Boolean hasAsValue(MapperConfig<?> config, Annotated a) {
+        JsonValue ann = _findAnnotation(a, JsonValue.class);
+        if (ann == null) {
+            return null;
+        }
+        return ann.value();
+    }
+
+    @Override
+    public Boolean hasAnyGetter(MapperConfig<?> config, Annotated a) {
+        JsonAnyGetter ann = _findAnnotation(a, JsonAnyGetter.class);
+        if (ann == null) {
+            return null;
+        }
+        return ann.enabled();
     }
 
     /*
@@ -951,7 +1065,7 @@ public class JacksonAnnotationIntrospector
      */
 
     @Override
-    public Object findDeserializer(Annotated a)
+    public Object findDeserializer(MapperConfig<?> config, Annotated a)
     {
         JsonDeserialize ann = _findAnnotation(a, JsonDeserialize.class);
         if (ann != null) {
@@ -965,7 +1079,7 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Object findKeyDeserializer(Annotated a)
+    public Object findKeyDeserializer(MapperConfig<?> config, Annotated a)
     {
         JsonDeserialize ann = _findAnnotation(a, JsonDeserialize.class);
         if (ann != null) {
@@ -978,7 +1092,7 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Object findContentDeserializer(Annotated a)
+    public Object findContentDeserializer(MapperConfig<?> config, Annotated a)
     {
         JsonDeserialize ann = _findAnnotation(a, JsonDeserialize.class);
         if (ann != null) {
@@ -992,14 +1106,14 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Object findDeserializationConverter(Annotated a)
+    public Object findDeserializationConverter(MapperConfig<?> config, Annotated a)
     {
         JsonDeserialize ann = _findAnnotation(a, JsonDeserialize.class);
         return (ann == null) ? null : _classIfExplicit(ann.converter(), Converter.None.class);
     }
 
     @Override
-    public Object findDeserializationContentConverter(AnnotatedMember a)
+    public Object findDeserializationContentConverter(MapperConfig<?> config, AnnotatedMember a)
     {
         JsonDeserialize ann = _findAnnotation(a, JsonDeserialize.class);
         return (ann == null) ? null : _classIfExplicit(ann.contentConverter(), Converter.None.class);
@@ -1012,35 +1126,74 @@ public class JacksonAnnotationIntrospector
      */
 
     @Override
-    @Deprecated
-    public Class<?> findDeserializationContentType(Annotated am, JavaType baseContentType)
+    public JavaType refineDeserializationType(final MapperConfig<?> config,
+            final Annotated a, final JavaType baseType) throws JsonMappingException
     {
-        JsonDeserialize ann = _findAnnotation(am, JsonDeserialize.class);
-        return (ann == null) ? null : _classIfExplicit(ann.contentAs());
-    }
-    
-    @Deprecated
-    @Override
-    public Class<?> findDeserializationType(Annotated am, JavaType baseType) {
-        JsonDeserialize ann = _findAnnotation(am, JsonDeserialize.class);
-        return (ann == null) ? null : _classIfExplicit(ann.as());
+        JavaType type = baseType;
+        final TypeFactory tf = config.getTypeFactory();
+
+        final JsonDeserialize jsonDeser = _findAnnotation(a, JsonDeserialize.class);
+        
+        // Ok: start by refining the main type itself; common to all types
+        final Class<?> valueClass = (jsonDeser == null) ? null : _classIfExplicit(jsonDeser.as());
+        if ((valueClass != null) && !type.hasRawClass(valueClass)
+                && !_primitiveAndWrapper(type, valueClass)) {
+            try {
+                type = tf.constructSpecializedType(type, valueClass);
+            } catch (IllegalArgumentException iae) {
+                throw new JsonMappingException(null,
+                        String.format("Failed to narrow type %s with annotation (value %s), from '%s': %s",
+                                type, valueClass.getName(), a.getName(), iae.getMessage()),
+                                iae);
+            }
+        }
+        // Then further processing for container types
+
+        // First, key type (for Maps, Map-like types):
+        if (type.isMapLikeType()) {
+            JavaType keyType = type.getKeyType();
+            final Class<?> keyClass = (jsonDeser == null) ? null : _classIfExplicit(jsonDeser.keyAs());
+            if ((keyClass != null)
+                    && !_primitiveAndWrapper(keyType, keyClass)) {
+                try {
+                    keyType = tf.constructSpecializedType(keyType, keyClass);
+                    type = ((MapLikeType) type).withKeyType(keyType);
+                } catch (IllegalArgumentException iae) {
+                    throw new JsonMappingException(null,
+                            String.format("Failed to narrow key type of %s with concrete-type annotation (value %s), from '%s': %s",
+                                    type, keyClass.getName(), a.getName(), iae.getMessage()),
+                                    iae);
+                }
+            }
+        }
+        JavaType contentType = type.getContentType();
+        if (contentType != null) { // collection[like], map[like], array, reference
+            // And then value types for all containers:
+            final Class<?> contentClass = (jsonDeser == null) ? null : _classIfExplicit(jsonDeser.contentAs());
+            if ((contentClass != null)
+                    && !_primitiveAndWrapper(contentType, contentClass)) {
+                try {
+                    contentType = tf.constructSpecializedType(contentType, contentClass);
+                    type = type.withContentType(contentType);
+                } catch (IllegalArgumentException iae) {
+                    throw new JsonMappingException(null,
+                            String.format("Failed to narrow value type of %s with concrete-type annotation (value %s), from '%s': %s",
+                                    type, contentClass.getName(), a.getName(), iae.getMessage()),
+                            iae);
+                }
+            }
+        }
+        return type;
     }
 
-    @Override
-    @Deprecated
-    public Class<?> findDeserializationKeyType(Annotated am, JavaType baseKeyType) {
-        JsonDeserialize ann = _findAnnotation(am, JsonDeserialize.class);
-        return (ann == null) ? null : _classIfExplicit(ann.keyAs());
-    }
-    
     /*
     /**********************************************************
     /* Deserialization: Class annotations
     /**********************************************************
      */
-    
+
     @Override
-    public Object findValueInstantiator(AnnotatedClass ac)
+    public Object findValueInstantiator(MapperConfig<?> config, AnnotatedClass ac)
     {
         JsonValueInstantiator ann = _findAnnotation(ac, JsonValueInstantiator.class);
         // no 'null' marker yet, so:
@@ -1048,14 +1201,14 @@ public class JacksonAnnotationIntrospector
     }
 
     @Override
-    public Class<?> findPOJOBuilder(AnnotatedClass ac)
+    public Class<?> findPOJOBuilder(MapperConfig<?> config, AnnotatedClass ac)
     {
         JsonDeserialize ann = _findAnnotation(ac, JsonDeserialize.class);
         return (ann == null) ? null : _classIfExplicit(ann.builder());
     }
 
     @Override
-    public JsonPOJOBuilder.Value findPOJOBuilderConfig(AnnotatedClass ac)
+    public JsonPOJOBuilder.Value findPOJOBuilderConfig(MapperConfig<?> config, AnnotatedClass ac)
     {
         JsonPOJOBuilder ann = _findAnnotation(ac, JsonPOJOBuilder.class);
         return (ann == null) ? null : new JsonPOJOBuilder.Value(ann);
@@ -1068,72 +1221,67 @@ public class JacksonAnnotationIntrospector
      */
 
     @Override
-    public PropertyName findNameForDeserialization(Annotated a)
+    public PropertyName findNameForDeserialization(MapperConfig<?> config, Annotated a)
     {
         // @JsonSetter has precedence over @JsonProperty, being more specific
-        // @JsonDeserialize implies that there is a property, but no name
+
+        boolean useDefault = false;
         JsonSetter js = _findAnnotation(a, JsonSetter.class);
         if (js != null) {
-            return PropertyName.construct(js.value());
+            String s = js.value();
+            // 04-May-2018, tatu: Need to allow for "nameless" `@JsonSetter` too
+            if (s.isEmpty()) {
+                useDefault = true;
+            } else {
+                return PropertyName.construct(s);
+            }
         }
         JsonProperty pann = _findAnnotation(a, JsonProperty.class);
         if (pann != null) {
             return PropertyName.construct(pann.value());
         }
-        if (_hasOneOf(a, ANNOTATIONS_TO_INFER_DESER)) {
+        if (useDefault || _hasOneOf(a, ANNOTATIONS_TO_INFER_DESER)) {
             return PropertyName.USE_DEFAULT;
         }
         return null;
     }
 
     @Override
-    public boolean hasAnySetterAnnotation(AnnotatedMethod am)
-    {
-        /* No dedicated disabling; regular @JsonIgnore used
-         * if needs to be ignored (and if so, is handled prior
-         * to this method getting called)
-         */
-        return _hasAnnotation(am, JsonAnySetter.class);
+    public Boolean hasAnySetter(MapperConfig<?> config, Annotated a) {
+        JsonAnySetter ann = _findAnnotation(a, JsonAnySetter.class);
+        return (ann == null) ? null : ann.enabled();
     }
 
     @Override
-    public boolean hasAnyGetterAnnotation(AnnotatedMethod am)
-    {
-        /* No dedicated disabling; regular @JsonIgnore used
-         * if needs to be ignored (handled separately
-         */
-        return _hasAnnotation(am, JsonAnyGetter.class);
+    public JsonSetter.Value findSetterInfo(MapperConfig<?> config, Annotated a) {
+        return JsonSetter.Value.from(_findAnnotation(a, JsonSetter.class));
     }
 
     @Override
-    public boolean hasCreatorAnnotation(Annotated a)
-    {
-        /* No dedicated disabling; regular @JsonIgnore used if needs to be
-         * ignored (and if so, is handled prior to this method getting called)
-         */
-         JsonCreator ann = _findAnnotation(a, JsonCreator.class);
-         if (ann != null) {
-             return (ann.mode() != JsonCreator.Mode.DISABLED);
-         }
-         // 19-Apr-2016, tatu: As per [databind#1197], [databind#1122] (and some related),
-         //    may or may not consider it a creator
-         if (_cfgConstructorPropertiesImpliesCreator ) {
-             if (a instanceof AnnotatedConstructor) {
-                 if (_java7Helper != null) {
-                     Boolean b = _java7Helper.hasCreatorAnnotation(a);
-                     if (b != null) {
-                         return b.booleanValue();
-                     }
-                 }
-             }
-         }
-         return false;
+    public Boolean findMergeInfo(MapperConfig<?> config, Annotated a) {
+        JsonMerge ann = _findAnnotation(a, JsonMerge.class);
+        return (ann == null) ? null : ann.value().asBoolean();
     }
 
     @Override
-    public JsonCreator.Mode findCreatorBinding(Annotated a) {
+    public JsonCreator.Mode findCreatorAnnotation(MapperConfig<?> config, Annotated a) {
         JsonCreator ann = _findAnnotation(a, JsonCreator.class);
-        return (ann == null) ? null : ann.mode();
+        if (ann != null) {
+            return ann.mode();
+        }
+        if (_cfgConstructorPropertiesImpliesCreator
+                && config.isEnabled(MapperFeature.INFER_CREATOR_FROM_CONSTRUCTOR_PROPERTIES)
+            ) {
+            if (_javaBeansHelper != null) {
+                Boolean b = _javaBeansHelper.hasCreatorAnnotation(a);
+                if ((b != null) && b.booleanValue()) {
+                    // 13-Sep-2016, tatu: Judgment call, but I don't think JDK ever implies
+                    //    use of delegate; assumes as-properties implicitly
+                    return JsonCreator.Mode.PROPERTIES;
+                }
+            }
+        }
+        return null;
     }
 
     /*
@@ -1148,8 +1296,9 @@ public class JacksonAnnotationIntrospector
         if (ann != null) {
             return ann.value();
         }
-        if (_java7Helper != null) {
-            Boolean b = _java7Helper.findTransient(a);
+        // From JDK 7/java.beans
+        if (_javaBeansHelper != null) {
+            Boolean b = _javaBeansHelper.findTransient(a);
             if (b != null) {
                 return b.booleanValue();
             }
@@ -1179,106 +1328,25 @@ public class JacksonAnnotationIntrospector
         return PropertyName.construct(localName, namespace);
     }
 
-    protected PropertyName _findConstructorName(Annotated a)
+    private boolean _primitiveAndWrapper(Class<?> baseType, Class<?> refinement)
     {
-        if (a instanceof AnnotatedParameter) {
-            AnnotatedParameter p = (AnnotatedParameter) a;
-            AnnotatedWithParams ctor = p.getOwner();
-
-            if (ctor != null) {
-                if (_java7Helper != null) {
-                    PropertyName name = _java7Helper.findConstructorName(p);
-                    if (name != null) {
-                        return name;
-                    }
-                }
-            }
+        if (baseType.isPrimitive()) {
+            return baseType == ClassUtil.primitiveType(refinement);
         }
-        return null;
+        if (refinement.isPrimitive()) {
+            return refinement == ClassUtil.primitiveType(baseType);
+        }
+        return false;
     }
 
-    /**
-     * Helper method called to construct and initialize instance of {@link TypeResolverBuilder}
-     * if given annotated element indicates one is needed.
-     */
-    @SuppressWarnings("deprecation")
-    protected TypeResolverBuilder<?> _findTypeResolver(MapperConfig<?> config,
-            Annotated ann, JavaType baseType)
+    private boolean _primitiveAndWrapper(JavaType baseType, Class<?> refinement)
     {
-        // First: maybe we have explicit type resolver?
-        TypeResolverBuilder<?> b;
-        JsonTypeInfo info = _findAnnotation(ann, JsonTypeInfo.class);
-        JsonTypeResolver resAnn = _findAnnotation(ann, JsonTypeResolver.class);
-        
-        if (resAnn != null) {
-            if (info == null) {
-                return null;
-            }
-            /* let's not try to force access override (would need to pass
-             * settings through if we did, since that's not doable on some
-             * platforms)
-             */
-            b = config.typeResolverBuilderInstance(ann, resAnn.value());
-        } else { // if not, use standard one, if indicated by annotations
-            if (info == null) {
-                return null;
-            }
-            // bit special; must return 'marker' to block use of default typing:
-            if (info.use() == JsonTypeInfo.Id.NONE) {
-                return _constructNoTypeResolverBuilder();
-            }
-            b = _constructStdTypeResolverBuilder();
+        if (baseType.isPrimitive()) {
+            return baseType.hasRawClass(ClassUtil.primitiveType(refinement));
         }
-        // Does it define a custom type id resolver?
-        JsonTypeIdResolver idResInfo = _findAnnotation(ann, JsonTypeIdResolver.class);
-        TypeIdResolver idRes = (idResInfo == null) ? null
-                : config.typeIdResolverInstance(ann, idResInfo.value());
-        if (idRes != null) {
-            idRes.init(baseType);
+        if (refinement.isPrimitive()) {
+            return refinement == ClassUtil.primitiveType(baseType.getRawClass());
         }
-        b = b.init(info.use(), idRes);
-        /* 13-Aug-2011, tatu: One complication; external id
-         *   only works for properties; so if declared for a Class, we will need
-         *   to map it to "PROPERTY" instead of "EXTERNAL_PROPERTY"
-         */
-        JsonTypeInfo.As inclusion = info.include();
-        if (inclusion == JsonTypeInfo.As.EXTERNAL_PROPERTY && (ann instanceof AnnotatedClass)) {
-            inclusion = JsonTypeInfo.As.PROPERTY;
-        }
-        b = b.inclusion(inclusion);
-        b = b.typeProperty(info.property());
-        Class<?> defaultImpl = info.defaultImpl();
-
-        // 08-Dec-2014, tatu: To deprecate `JsonTypeInfo.None` we need to use other placeholder(s);
-        //   and since `java.util.Void` has other purpose (to indicate "deser as null"), we'll instead
-        //   use `JsonTypeInfo.class` itself. But any annotation type will actually do, as they have no
-        //   valid use (can not instantiate as default)
-        if (defaultImpl != JsonTypeInfo.None.class && !defaultImpl.isAnnotation()) {
-            b = b.defaultImpl(defaultImpl);
-        }
-        b = b.typeIdVisibility(info.visible());
-        return b;
+        return false;
     }
-
-    /**
-     * Helper method for constructing standard {@link TypeResolverBuilder}
-     * implementation.
-     */
-    protected StdTypeResolverBuilder _constructStdTypeResolverBuilder() {
-        return new StdTypeResolverBuilder();
-    }
-
-    /**
-     * Helper method for dealing with "no type info" marker; can't be null
-     * (as it'd be replaced by default typing)
-     */
-    protected StdTypeResolverBuilder _constructNoTypeResolverBuilder() {
-        return StdTypeResolverBuilder.noTypeInfoBuilder();
-    }
-
-    /*
-    /**********************************************************
-    /* Helper classes
-    /**********************************************************
-     */
 }

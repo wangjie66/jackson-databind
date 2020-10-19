@@ -56,7 +56,7 @@ public class TestRootType
         public int a = 3;
     }
 
-    // [Issue#412]
+    // [databind#412]
     static class TestCommandParent {
         public String uuid;
         public int type;
@@ -70,11 +70,10 @@ public class TestRootType
     /**********************************************************
      */
 
-    final ObjectMapper WRAP_ROOT_MAPPER = new ObjectMapper();
-    {
-        WRAP_ROOT_MAPPER.configure(SerializationFeature.WRAP_ROOT_VALUE, true);
-    }
-    
+    final ObjectMapper WRAP_ROOT_MAPPER = jsonMapperBuilder()
+            .enable(SerializationFeature.WRAP_ROOT_VALUE)
+            .build();
+
     @SuppressWarnings("unchecked")
     public void testSuperClass() throws Exception
     {
@@ -114,9 +113,10 @@ public class TestRootType
 
     public void testInArray() throws Exception
     {
-        ObjectMapper mapper = new ObjectMapper();
         // must force static typing, otherwise won't matter a lot
-        mapper.configure(MapperFeature.USE_STATIC_TYPING, true);
+        ObjectMapper mapper = jsonMapperBuilder()
+                .enable(MapperFeature.USE_STATIC_TYPING)
+                .build();
         SubType[] ob = new SubType[] { new SubType() };
         String json = mapper.writerFor(BaseInterface[].class).writeValueAsString(ob);
         // should propagate interface type through due to root declaration; static typing
@@ -164,8 +164,7 @@ public class TestRootType
         assertEquals(EXP, json);
 
         StringWriter out = new StringWriter();
-        JsonFactory f = new JsonFactory();
-        mapper.writerFor(collectionType).writeValue(f.createGenerator(out), typedList);
+        mapper.writerFor(collectionType).writeValue(mapper.createGenerator(out), typedList);
 
         assertEquals(EXP, out.toString());
     }
@@ -190,14 +189,13 @@ public class TestRootType
         assertEquals("456", mapper.writerFor(Long.TYPE).writeValueAsString(Long.valueOf(456L)));
     }
 
-    // [JACKSON-630] also, allow annotation to define root name
     public void testRootNameAnnotation() throws Exception
     {
         String json = WRAP_ROOT_MAPPER.writeValueAsString(new WithRootName());
         assertEquals("{\"root\":{\"a\":3}}", json);
     }
 
-    // [Issue#412]
+    // [databind#412]
     public void testRootNameWithExplicitType() throws Exception
     {
         TestCommandChild cmd = new TestCommandChild();
@@ -207,6 +205,6 @@ public class TestRootType
         ObjectWriter writer = WRAP_ROOT_MAPPER.writerFor(TestCommandParent.class);
         String json =  writer.writeValueAsString(cmd);
 
-        assertEquals(json, "{\"TestCommandParent\":{\"uuid\":\"1234\",\"type\":1}}");
+        assertEquals("{\"TestCommandParent\":{\"uuid\":\"1234\",\"type\":1}}", json);
     }
 }

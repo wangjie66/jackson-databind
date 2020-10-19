@@ -3,13 +3,10 @@ package com.fasterxml.jackson.databind;
 import java.lang.annotation.Annotation;
 import java.util.*;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.core.Version;
 import com.fasterxml.jackson.core.Versioned;
+
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder;
@@ -18,10 +15,7 @@ import com.fasterxml.jackson.databind.cfg.MapperConfig;
 import com.fasterxml.jackson.databind.deser.ValueInstantiator;
 import com.fasterxml.jackson.databind.introspect.*;
 import com.fasterxml.jackson.databind.jsontype.NamedType;
-import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
 import com.fasterxml.jackson.databind.ser.BeanPropertyWriter;
-import com.fasterxml.jackson.databind.type.MapLikeType;
-import com.fasterxml.jackson.databind.type.TypeFactory;
 import com.fasterxml.jackson.databind.util.Converter;
 import com.fasterxml.jackson.databind.util.NameTransformer;
 
@@ -47,9 +41,9 @@ public abstract class AnnotationIntrospector
     implements Versioned, java.io.Serializable
 {
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Helper types
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -67,7 +61,7 @@ public abstract class AnnotationIntrospector
              * {@link com.fasterxml.jackson.annotation.JsonManagedReference}
              */
             MANAGED_REFERENCE
-    
+
             /**
              * Reference property that Jackson manages by suppressing it during serialization,
              * and reconstructing during deserialization.
@@ -97,15 +91,17 @@ public abstract class AnnotationIntrospector
     }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Factory methods
-    /**********************************************************
+    /**********************************************************************
      */
     
     /**
      * Factory method for accessing "no operation" implementation
      * of introspector: instance that will never find any annotation-based
      * configuration.
+     *
+     * @return "no operation" instance
      */
     public static AnnotationIntrospector nopInstance() {
         return NopAnnotationIntrospector.instance;
@@ -116,9 +112,9 @@ public abstract class AnnotationIntrospector
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Access to possibly chained introspectors
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -131,6 +127,9 @@ public abstract class AnnotationIntrospector
      * as contents.
      * This usually works for sub-classes, except for proxy or delegating "container
      * introspectors" which need to override implementation.
+     *
+     * @return Collection of all introspectors starting with this one, in case
+     *    multiple introspectors are chained
      */
     public Collection<AnnotationIntrospector> allIntrospectors() {
         return Collections.singletonList(this);
@@ -145,6 +144,11 @@ public abstract class AnnotationIntrospector
      * Default implementation adds this introspector in result; this usually
      * works for sub-classes, except for proxy or delegating "container
      * introspectors" which need to override implementation.
+     *
+     * @param result Container to add introspectors to
+     *
+     * @return Passed in {@code Collection} filled with introspectors as explained
+     *    above
      */
     public Collection<AnnotationIntrospector> allIntrospectors(Collection<AnnotationIntrospector> result) {
         result.add(this);
@@ -152,37 +156,40 @@ public abstract class AnnotationIntrospector
     }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Default Versioned impl
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
     public abstract Version version();
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Meta-annotations (annotations for annotation types)
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method for checking whether given annotation is considered an
      * annotation bundle: if so, all meta-annotations it has will
      * be used instead of annotation ("bundle") itself.
-     * 
-     * @since 2.0
+     *
+     * @param ann Annotated entity to introspect
+     *
+     * @return True if given annotation is considered an annotation
+     *    bundle; false if not
      */
     public boolean isAnnotationBundle(Annotation ann) {
         return false;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Annotations for Object Id handling
-    /**********************************************************
+    /**********************************************************************
      */
-    
+
     /**
      * Method for checking whether given annotated thing
      * (type, or accessor) indicates that values
@@ -190,26 +197,35 @@ public abstract class AnnotationIntrospector
      * values referenced by annotated property; latter
      * having precedence) should include Object Identifier,
      * and if so, specify details of Object Identity used.
-     * 
-     * @since 2.0
+     *
+     * @param config Effective mapper configuration in use
+     * @param ann Annotated entity to introspect
+     *
+     * @return Details of Object Id as explained above, if Object Id
+     *    handling to be applied; {@code null} otherwise.
      */
-    public ObjectIdInfo findObjectIdInfo(Annotated ann) {
+    public ObjectIdInfo findObjectIdInfo(MapperConfig<?> config, Annotated ann) {
         return null;
     }
 
     /**
      * Method for figuring out additional properties of an Object Identity reference
-     * 
-     * @since 2.1
+     *
+     * @param config Effective mapper configuration in use
+     * @param ann Annotated entity to introspect
+     * @param objectIdInfo (optional) Base Object Id information, if any; {@code null} if none
+     *
+     * @return {@link ObjectIdInfo} augmented with possible additional information
      */
-    public ObjectIdInfo findObjectReferenceInfo(Annotated ann, ObjectIdInfo objectIdInfo) {
+    public ObjectIdInfo findObjectReferenceInfo(MapperConfig<?> config,
+            Annotated ann, ObjectIdInfo objectIdInfo) {
         return objectIdInfo;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* General class annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -218,109 +234,81 @@ public abstract class AnnotationIntrospector
      * for XML compatibility purposes) for given class, if one
      * is defined. Returns null if no declaration found; can return
      * explicit empty String, which is usually ignored as well as null.
-     *<p> 
-     * NOTE: method signature changed in 2.1, to return {@link PropertyName}
-     * instead of String.
+     *
+     * @param config Effective mapper configuration in use
+     * @param ac Annotated class to introspect
      */
-    public PropertyName findRootName(AnnotatedClass ac) {
+    public PropertyName findRootName(MapperConfig<?> config, AnnotatedClass ac) {
         return null;
     }
-
-    /**
-     * Method for finding information about properties to ignore either by
-     * name, or by more general specification ("ignore all unknown").
-     * This method combines multiple aspects of ignorals and deprecates
-     * earlier methods such as
-     * {@link #findPropertiesToIgnore(Annotated, boolean)} and
-     * {@link #findIgnoreUnknownProperties(AnnotatedClass)}.
-     *
-     * @since 2.8
-     */
-    public JsonIgnoreProperties.Value findPropertyIgnorals(Annotated ac)
-    {
-        // 28-Apr-2016, tatu: For backwards compatibility let's delegate to older
-        //   methods, for Jackson 2.8
-        String[] ignorals = findPropertiesToIgnore(ac, true);
-        Boolean b = (ac instanceof AnnotatedClass) ?
-                findIgnoreUnknownProperties((AnnotatedClass) ac) : null;
-        JsonIgnoreProperties.Value v;
-        if (ignorals == null) {
-            if (b == null) {
-                return null;
-            }
-            v = JsonIgnoreProperties.Value.empty();
-        } else {
-            v = JsonIgnoreProperties.Value.forIgnoredProperties(ignorals);
-        }
-        if (b != null) {
-            v = b.booleanValue() ? v.withIgnoreUnknown() : v.withoutIgnoreUnknown();
-        }
-        return v;
-    }
-
-    /**
-     * @param forSerialization True if requesting properties to ignore for serialization;
-     *   false if for deserialization
-     * 
-     * @since 2.6
-     *
-     * @deprecated Since 2.8, use {@link #findPropertyIgnorals} instead
-     */
-    @Deprecated // since 2.8
-    public String[] findPropertiesToIgnore(Annotated ac, boolean forSerialization) {
-        return null;
-    }
-
-    /**
-     * @deprecated Since 2.6, use variant that takes second argument.
-     */
-    @Deprecated // since 2.6
-    public String[] findPropertiesToIgnore(Annotated ac) {
-        return null;
-    }
-
-    /**
-     * Method for checking whether an annotation indicates that all unknown properties
-     *
-     * @deprecated Since 2.8, use {@link #findPropertyIgnorals} instead
-     */
-    @Deprecated // since 2.8
-    public Boolean findIgnoreUnknownProperties(AnnotatedClass ac) { return null; }
 
     /**
      * Method for checking whether properties that have specified type
      * (class, not generics aware) should be completely ignored for
      * serialization and deserialization purposes.
-     * 
-     * @param ac Type to check
-     * 
+     *
+     * @param config Effective mapper configuration in use
+     * @param ac Annotated class to introspect
+     *
      * @return Boolean.TRUE if properties of type should be ignored;
      *   Boolean.FALSE if they are not to be ignored, null for default
      *   handling (which is 'do not ignore')
      */
-    public Boolean isIgnorableType(AnnotatedClass ac) { return null; }
+    public Boolean isIgnorableType(MapperConfig<?> config, AnnotatedClass ac) { return null; }
+
+    /**
+     * Method for finding information about properties to ignore either by
+     * name, or by more general specification ("ignore all unknown").
+     * This method combines multiple aspects of name-based (as opposed to value-based)
+     * ignorals.
+     *
+     * @param config Configuration settings in effect (for serialization or deserialization)
+     * @param ann Annotated entity (Class, Accessor) to introspect
+     */
+    public JsonIgnoreProperties.Value findPropertyIgnoralByName(MapperConfig<?> config, Annotated ann) {
+        return JsonIgnoreProperties.Value.empty();
+    }
+
+    /**
+     * Method for finding information about names of properties to included.
+     * This is typically used to strictly limit properties to include based
+     * on fully defined set of names ("allow-listing"), as opposed to excluding
+     * potential properties by exclusion ("deny-listing").
+     *
+     * @param config Configuration settings in effect (for serialization or deserialization)
+     * @param ann Annotated entity (Class, Accessor) to introspect
+     *
+     * @since 2.12
+     */
+    public JsonIncludeProperties.Value findPropertyInclusionByName(MapperConfig<?> config, Annotated ann) {
+        return JsonIncludeProperties.Value.all();
+    }
 
     /**
      * Method for finding if annotated class has associated filter; and if so,
      * to return id that is used to locate filter.
+     *
+     * @param config Effective mapper configuration in use
+     * @param ann Annotated entity to introspect
      * 
      * @return Id of the filter to use for filtering properties of annotated
      *    class, if any; or null if none found.
      */
-    public Object findFilterId(Annotated ann) { return null; }
+    public Object findFilterId(MapperConfig<?> config, Annotated ann) { return null; }
 
     /**
      * Method for finding {@link PropertyNamingStrategy} for given
      * class, if any specified by annotations; and if so, either return
      * a {@link PropertyNamingStrategy} instance, or Class to use for
      * creating instance
-     * 
+     *
+     * @param config Effective mapper configuration in use
+     * @param ac Annotated class to introspect
+     *
      * @return Sub-class or instance of {@link PropertyNamingStrategy}, if one
      *   is specified for given class; null if not.
-     * 
-     * @since 2.1
      */
-    public Object findNamingStrategy(AnnotatedClass ac) { return null; }
+    public Object findNamingStrategy(MapperConfig<?> config, AnnotatedClass ac) { return null; }
 
     /**
      * Method used to check whether specified class defines a human-readable
@@ -328,17 +316,18 @@ public abstract class AnnotationIntrospector
      * There are no further definitions for contents; for example, whether
      * these may be marked up using HTML (or something like wiki format like Markup)
      * is not defined.
+     *
+     * @param config Effective mapper configuration in use
+     * @param ac Annotated class to introspect
      * 
      * @return Human-readable description, if any.
-     * 
-     * @since 2.7
      */
-    public String findClassDescription(AnnotatedClass ac) { return null; }
+    public String findClassDescription(MapperConfig<?> config, AnnotatedClass ac) { return null; }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Property auto-detection
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -347,75 +336,52 @@ public abstract class AnnotationIntrospector
      * A baseline checker is given, and introspector is to either return it as is
      * (if no annotations are found), or build and return a derived instance (using
      * checker's build methods).
+     *
+     * @param config Effective mapper configuration in use
+     * @param ac Annotated class to introspect
      */
-    public VisibilityChecker<?> findAutoDetectVisibility(AnnotatedClass ac, VisibilityChecker<?> checker) {
+    public VisibilityChecker findAutoDetectVisibility(MapperConfig<?> config, 
+            AnnotatedClass ac, VisibilityChecker checker) {
         return checker;
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Annotations for Polymorphic type handling
-    /**********************************************************
+    /**********************************************************************
     */
-    
+
     /**
-     * Method for checking if given class has annotations that indicate
-     * that specific type resolver is to be used for handling instances.
-     * This includes not only
-     * instantiating resolver builder, but also configuring it based on
-     * relevant annotations (not including ones checked with a call to
-     * {@link #findSubtypes}
-     * 
-     * @param config Configuration settings in effect (for serialization or deserialization)
-     * @param ac Annotated class to check for annotations
-     * @param baseType Base java type of value for which resolver is to be found
-     * 
-     * @return Type resolver builder for given type, if one found; null if none
+     * Method for checking whether given Class or Property Accessor specifies
+     * polymorphic type-handling information, to indicate need for polymorphic
+     * handling.
+     *
+     * @param config Effective mapper configuration in use
+     * @param ann Annotated entity to introspect
+     *
+     * @since 3.0
      */
-    public TypeResolverBuilder<?> findTypeResolver(MapperConfig<?> config,
-            AnnotatedClass ac, JavaType baseType) {
+    public JsonTypeInfo.Value findPolymorphicTypeInfo(MapperConfig<?> config, Annotated ann) {
         return null;
     }
 
     /**
-     * Method for checking if given property entity (field or method) has annotations
-     * that indicate that specific type resolver is to be used for handling instances.
-     * This includes not only
-     * instantiating resolver builder, but also configuring it based on
-     * relevant annotations (not including ones checked with a call to
-     * {@link #findSubtypes}
-     * 
-     * @param config Configuration settings in effect (for serialization or deserialization)
-     * @param am Annotated member (field or method) to check for annotations
-     * @param baseType Base java type of property for which resolver is to be found
-     * 
-     * @return Type resolver builder for properties of given entity, if one found;
-     *    null if none
+     * @param config Effective mapper configuration in use
+     * @param ann Annotated entity to introspect
+     *
+     * @since 3.0
      */
-    public TypeResolverBuilder<?> findPropertyTypeResolver(MapperConfig<?> config,
-            AnnotatedMember am, JavaType baseType) {
+    public Object findTypeResolverBuilder(MapperConfig<?> config, Annotated ann) {
         return null;
     }
 
     /**
-     * Method for checking if given structured property entity (field or method that
-     * has nominal value of Map, Collection or array type) has annotations
-     * that indicate that specific type resolver is to be used for handling type
-     * information of contained values.
-     * This includes not only
-     * instantiating resolver builder, but also configuring it based on
-     * relevant annotations (not including ones checked with a call to
-     * {@link #findSubtypes}
-     * 
-     * @param config Configuration settings in effect (for serialization or deserialization)
-     * @param am Annotated member (field or method) to check for annotations
-     * @param containerType Type of property for which resolver is to be found (must be a container type)
-     * 
-     * @return Type resolver builder for values contained in properties of given entity,
-     *    if one found; null if none
-     */    
-    public TypeResolverBuilder<?> findPropertyContentTypeResolver(MapperConfig<?> config,
-            AnnotatedMember am, JavaType containerType) {
+     * @param config Effective mapper configuration in use
+     * @param ann Annotated entity to introspect
+     *
+     * @since 3.0
+     */
+    public Object findTypeIdResolver(MapperConfig<?> config, Annotated ann) {
         return null;
     }
 
@@ -426,35 +392,43 @@ public abstract class AnnotationIntrospector
      * declared subtypes, no recursive processing is guarantees (i.e. caller
      * has to do it if/as necessary)
      * 
+     * @param config Effective mapper configuration in use
      * @param a Annotated entity (class, field/method) to check for annotations
      */
-    public List<NamedType> findSubtypes(Annotated a) { return null; }
+    public List<NamedType> findSubtypes(MapperConfig<?> config, Annotated a) { return null; }
 
     /**
      * Method for checking if specified type has explicit name.
-     * 
+     *
+     * @param config Effective mapper configuration in use
      * @param ac Class to check for type name annotations
      */
-    public String findTypeName(AnnotatedClass ac) { return null; }
+    public String findTypeName(MapperConfig<?> config, AnnotatedClass ac) { return null; }
 
     /**
      * Method for checking whether given accessor claims to represent
      * type id: if so, its value may be used as an override,
      * instead of generated type id.
+     *
+     * @param config Effective mapper configuration in use
+     * @param member Member to check for type id information
      */
-    public Boolean isTypeId(AnnotatedMember member) { return null; }
+    public Boolean isTypeId(MapperConfig<?> config, AnnotatedMember member) { return null; }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* General member (field, method/constructor) annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method for checking if given member indicates that it is part
      * of a reference (parent/child).
+     *
+     * @param config Effective mapper configuration in use
+     * @param member Member to check for information
      */
-    public ReferenceProperty findReferenceType(AnnotatedMember member) { return null; }
+    public ReferenceProperty findReferenceType(MapperConfig<?> config, AnnotatedMember member) { return null; }
 
     /**
      * Method called to check whether given property is marked to be "unwrapped"
@@ -463,8 +437,11 @@ public abstract class AnnotationIntrospector
      * Return value is the name transformation to use, if wrapping/unwrapping
      * should  be done, or null if not -- note that transformation may simply
      * be identity transformation (no changes).
+     *
+     * @param config Effective mapper configuration in use
+     * @param member Member to check for information
      */
-    public NameTransformer findUnwrappingNameTransformer(AnnotatedMember member) { return null; }
+    public NameTransformer findUnwrappingNameTransformer(MapperConfig<?> config, AnnotatedMember member) { return null; }
 
     /**
      * Method called to check whether given property is marked to
@@ -472,8 +449,11 @@ public abstract class AnnotationIntrospector
      * properties, on per-property basis, usually combining
      * annotations from multiple accessors (getters, setters, fields,
      * constructor parameters).
+     *
+     * @param config Effective mapper configuration in use
+     * @param member Member to check for information
      */
-    public boolean hasIgnoreMarker(AnnotatedMember m) { return false; }
+    public boolean hasIgnoreMarker(MapperConfig<?> config, AnnotatedMember member) { return false; }
 
     /**
      * Method called to find out whether given member expectes a value
@@ -483,22 +463,26 @@ public abstract class AnnotationIntrospector
      * values (of type {@link InjectableValues}); often a simple String
      * id is used.
      * 
-     * @param m Member to check
+     * @param config Effective mapper configuration in use
+     * @param member Member to check for information
      * 
      * @return Identifier of value to inject, if any; null if no injection
      *   indicator is found
      */
-    public Object findInjectableValueId(AnnotatedMember m) { return null; }
+    public JacksonInject.Value findInjectableValue(MapperConfig<?> config, AnnotatedMember member) {
+        return null;
+    }
 
     /**
      * Method that can be called to check whether this member has
      * an annotation that suggests whether value for matching property
      * is required or not.
-     * 
-     * @since 2.0
+     *
+     * @param config Effective mapper configuration in use
+     * @param member Member to check for information
      */
-    public Boolean hasRequiredMarker(AnnotatedMember m) { return null; }
-    
+    public Boolean hasRequiredMarker(MapperConfig<?> config, AnnotatedMember member) { return null; }
+
     /**
      * Method for checking if annotated property (represented by a field or
      * getter/setter method) has definitions for views it is to be included in.
@@ -507,35 +491,42 @@ public abstract class AnnotationIntrospector
      * otherwise it will only be included for views included in returned
      * array. View matches are checked using class inheritance rules (sub-classes
      * inherit inclusions of super-classes)
+     *<p>
+     * Since 2.9 this method may also be called to find "default view(s)" for
+     * {@link AnnotatedClass}
      * 
+     * @param config Effective mapper configuration in use
      * @param a Annotated property (represented by a method, field or ctor parameter)
+     *
      * @return Array of views (represented by classes) that the property is included in;
      *    if null, always included (same as returning array containing <code>Object.class</code>)
      */
-    public Class<?>[] findViews(Annotated a) { return null; }
+    public Class<?>[] findViews(MapperConfig<?> config, Annotated a) { return null; }
 
     /**
      * Method for finding format annotations for property or class.
      * Return value is typically used by serializers and/or
      * deserializers to customize presentation aspects of the
      * serialized value.
-     * 
-     * @since 2.1
+     *
+     * @param config Effective mapper configuration in use
      */
-    public JsonFormat.Value findFormat(Annotated memberOrClass) { return null; }
+    public JsonFormat.Value findFormat(MapperConfig<?> config, Annotated memberOrClass) {
+        return JsonFormat.Value.empty();
+    }
 
     /**
      * Method used to check if specified property has annotation that indicates
      * that it should be wrapped in an element; and if so, name to use.
      * Note that not all serializers and deserializers support use this method:
-     * currently (2.1) it is only used by XML-backed handlers.
-     * 
+     * currently (3.0) it is only used by XML-backed handlers.
+     *
+     * @param config Effective mapper configuration in use
+     *
      * @return Wrapper name to use, if any, or {@link PropertyName#USE_DEFAULT}
      *   to indicate that no wrapper element should be used.
-     * 
-     * @since 2.1
      */
-    public PropertyName findWrapperName(Annotated ann) { return null; }
+    public PropertyName findWrapperName(MapperConfig<?> config, Annotated ann) { return null; }
 
     /**
      * Method for finding suggested default value (as simple textual serialization)
@@ -543,21 +534,21 @@ public abstract class AnnotationIntrospector
      * for extension modules to use: an expected use is generation of schema representations
      * and documentation.
      *
-     * @since 2.5
+     * @param config Effective mapper configuration in use
      */
-    public String findPropertyDefaultValue(Annotated ann) { return null; }
+    public String findPropertyDefaultValue(MapperConfig<?> config, Annotated ann) { return null; }
 
     /**
      * Method used to check whether specified property member (accessor
      * or mutator) defines human-readable description to use for documentation.
      * There are no further definitions for contents; for example, whether
      * these may be marked up using HTML is not defined.
+     *
+     * @param config Effective mapper configuration in use
      * 
      * @return Human-readable description, if any.
-     * 
-     * @since 2.3
      */
-    public String findPropertyDescription(Annotated ann) { return null; }
+    public String findPropertyDescription(MapperConfig<?> config, Annotated ann) { return null; }
 
     /**
      * Method used to check whether specified property member (accessor
@@ -565,27 +556,37 @@ public abstract class AnnotationIntrospector
      * Possible use cases for index values included use by underlying data format
      * (some binary formats mandate use of index instead of name) and ordering
      * of properties (for documentation, or during serialization).
-     * 
-     * @since 2.4
-     * 
+     *
+     * @param config Effective mapper configuration in use
+     *
      * @return Explicitly specified index for the property, if any
      */
-    public Integer findPropertyIndex(Annotated ann) { return null; }
+    public Integer findPropertyIndex(MapperConfig<?> config, Annotated ann) { return null; }
 
     /**
      * Method for finding implicit name for a property that given annotated
      * member (field, method, creator parameter) may represent.
      * This is different from explicit, annotation-based property name, in that
-     * it is "weak" and does not either proof that a property exists (for example,
+     * it is "weak" and does not either prove that a property exists (for example,
      * if visibility is not high enough), or override explicit names.
      * In practice this method is used to introspect optional names for creator
-     * parameters (which may or may not be available and can not be detected
+     * parameters (which may or may not be available and cannot be detected
      * by standard databind); or to provide alternate name mangling for
      * fields, getters and/or setters.
-     * 
-     * @since 2.4
+     *
+     * @param config Effective mapper configuration in use
      */
-    public String findImplicitPropertyName(AnnotatedMember member) { return null; }
+    public String findImplicitPropertyName(MapperConfig<?> config, AnnotatedMember member) { return null; }
+
+    /**
+     * Method called to find if given property has alias(es) defined.
+     *
+     * @param config Effective mapper configuration in use
+     *
+     * @return `null` if member has no information; otherwise a `List` (possibly
+     *   empty) of aliases to use.
+     */
+    public List<PropertyName> findPropertyAliases(MapperConfig<?> config, Annotated ann) { return null; }
 
     /**
      * Method for finding optional access definition for a property, annotated
@@ -594,70 +595,100 @@ public abstract class AnnotationIntrospector
      * that even more specific annotations (like one for ignoring specific accessor)
      * may further override behavior of the access definition.
      *
-     * @since 2.6
+     * @param config Effective mapper configuration in use
      */
-    public JsonProperty.Access findPropertyAccess(Annotated ann) { return null; }
+    public JsonProperty.Access findPropertyAccess(MapperConfig<?> config, Annotated ann) { return null; }
 
     /**
      * Method called in cases where a class has two methods eligible to be used
      * for the same logical property, and default logic is not enough to figure
      * out clear precedence. Introspector may try to choose one to use; or, if
-     * unable, return `null` to indicate it can not resolve the problem.
+     * unable, return `null` to indicate it cannot resolve the problem.
      *
-     * @since 2.7
+     * @param config Effective mapper configuration in use
      */
     public AnnotatedMethod resolveSetterConflict(MapperConfig<?> config,
             AnnotatedMethod setter1, AnnotatedMethod setter2) {
         return null;
     }
 
+    /**
+     * Method called on fields that are eligible candidates for properties
+     * (that is, non-static member fields), but not necessarily selected (may
+     * or may not be visible), to let fields affect name linking.
+     * Call will be made after finding implicit name (which by default is just
+     * name of the field, but may be overridden by introspector), but before
+     * discovering other accessors.
+     * If non-null name returned, it is to be used to find other accessors (getters,
+     * setters, creator parameters) and replace their implicit names with that
+     * of field's implicit name (assuming they differ).
+     *<p>
+     * Specific example (and initial use case is for support Kotlin's "is getter"
+     * matching (see
+     * <a href="https://kotlinlang.org/docs/reference/java-to-kotlin-interop.html">Kotling Interop</a>
+     * for details), in which field like '{@code isOpen}' would have implicit name of
+     * "isOpen", match getter {@code getOpen()} and setter {@code setOpen(boolean)},
+     * but use logical external name of "isOpen" (and not implicit name of getter/setter, "open"!).
+     * To achieve this, field implicit name needs to remain "isOpen" but this method needs
+     * to return name {@code PropertyName.construct("open")}: doing so will "pull in" getter
+     * and/or setter, and rename them as "isOpen".
+     *
+     * @param config Effective mapper configuration in use
+     * @param f Field to check
+     * @param implName Implicit name of the field; usually name of field itself but not always,
+     *    used as the target name for accessors to rename.
+     *
+     * @return Name used to find other accessors to rename, if any; {@code null} to indicate
+     *    no renaming
+     */
+    public PropertyName findRenameByField(MapperConfig<?> config,
+            AnnotatedField f, PropertyName implName) {
+        return null;
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Serialization: general annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method for getting a serializer definition on specified method
-     * or field. Type of definition is either instance (of type
-     * {@link JsonSerializer}) or Class (of type
-     * {@code Class<JsonSerializer>}; if value of different
-     * type is returned, a runtime exception may be thrown by caller.
+     * or field. Type of definition is either instance (of type {@link JsonSerializer})
+     * or Class (of {@code Class<JsonSerializer>} implementation subtype);
+     * if value of different type is returned, a runtime exception may be thrown by caller.
      */
-    public Object findSerializer(Annotated am) {
+    public Object findSerializer(MapperConfig<?> config, Annotated am) {
         return null;
     }
 
     /**
-     * Method for getting a serializer definition for keys of associated <code>Map</code> property.
-     * Type of definition is either instance (of type
-     * {@link JsonSerializer}) or Class (of type
-     * {@code Class<JsonSerializer>}); if value of different
-     * type is returned, a runtime exception may be thrown by caller.
+     * Method for getting a serializer definition for keys of associated {@code java.util.Map} property.
+     * Type of definition is either instance (of type {@link JsonSerializer})
+     * or Class (of type  {@code Class<JsonSerializer>});
+     * if value of different type is returned, a runtime exception may be thrown by caller.
      */
-    public Object findKeySerializer(Annotated am) {
+    public Object findKeySerializer(MapperConfig<?> config, Annotated am) {
         return null;
     }
 
     /**
      * Method for getting a serializer definition for content (values) of
-     * associated <code>Collection</code>, <code>array</code> or <code>Map</code> property.
-     * Type of definition is either instance (of type
-     * {@link JsonSerializer}) or Class (of type
-     * {@code Class<JsonSerializer>}); if value of different
+     * associated <code>Collection</code>, <code>array</code> or {@code Map} property.
+     * Type of definition is either instance (of type {@link JsonSerializer})
+     * or Class (of type  {@code Class<JsonSerializer>});
+     * if value of different
      * type is returned, a runtime exception may be thrown by caller.
      */
-    public Object findContentSerializer(Annotated am) {
+    public Object findContentSerializer(MapperConfig<?> config, Annotated am) {
         return null;
     }
 
     /**
      * Method for getting a serializer definition for serializer to use
      * for nulls (null values) of associated property or type.
-     * 
-     * @since 2.3
      */
-    public Object findNullSerializer(Annotated am) {
+    public Object findNullSerializer(MapperConfig<?> config, Annotated am) {
         return null;
     }
 
@@ -669,7 +700,7 @@ public abstract class AnnotationIntrospector
      *
      * @return Typing mode to use, if annotation is found; null otherwise
      */
-    public JsonSerialize.Typing findSerializationTyping(Annotated a) {
+    public JsonSerialize.Typing findSerializationTyping(MapperConfig<?> config, Annotated a) {
         return null;
     }
 
@@ -689,12 +720,9 @@ public abstract class AnnotationIntrospector
      * type handling, or object identity handling; if such features are needed
      * an explicit serializer is usually better way to handle serialization.
      * 
-     * @param a Annotated property (field, method) or class to check for
-     *   annotations
-     *   
-     * @since 2.2
+     * @param a Annotated property (field, method) or class to check for annotations
      */
-    public Object findSerializationConverter(Annotated a) {
+    public Object findSerializationConverter(MapperConfig<?> config, Annotated a) {
         return null;
     }
 
@@ -713,47 +741,9 @@ public abstract class AnnotationIntrospector
      * Other notes are same as those for {@link #findSerializationConverter}
      * 
      * @param a Annotated property (field, method) to check.
-     *   
-     * @since 2.2
      */
-    public Object findSerializationContentConverter(AnnotatedMember a) {
+    public Object findSerializationContentConverter(MapperConfig<?> config, AnnotatedMember a) {
         return null;
-    }
-
-    /**
-     * Method for checking whether given annotated entity (class, method,
-     * field) defines which Bean/Map properties are to be included in
-     * serialization.
-     * If no annotation is found, method should return given second
-     * argument; otherwise value indicated by the annotation.
-     *<p>
-     * Note that meaning of inclusion value depends on whether it is for
-     * a Class or property (field/method/constructor): in former case,
-     * it is the default for all properties; in latter case it is specific
-     * override for annotated property.
-     *
-     * @return Enumerated value indicating which properties to include
-     *   in serialization
-     * 
-     * @deprecated Since 2.7 Use {@link #findPropertyInclusion} instead
-     */
-    @Deprecated // since 2.7
-    public JsonInclude.Include findSerializationInclusion(Annotated a, JsonInclude.Include defValue) {
-        return defValue;
-    }
-
-    /**
-     * Method for checking whether content (entries) of a {@link java.util.Map} property
-     * are to be included during serialization or not.
-     * NOTE: this is NOT called for POJO properties, or array/Collection elements.
-     * 
-     * @since 2.5
-     * 
-     * @deprecated Since 2.7 Use {@link #findPropertyInclusion} instead
-     */
-    @Deprecated // since 2.7
-    public JsonInclude.Include findSerializationInclusionForContent(Annotated a, JsonInclude.Include defValue) {
-        return defValue;
     }
 
     /**
@@ -761,194 +751,39 @@ public abstract class AnnotationIntrospector
      * name is bit unfortunate -- not just for properties!).
      * In case of class, acts as the default for properties POJO contains; for properties
      * acts as override for class defaults and possible global defaults.
-     *
-     * @since 2.6
      */
-    public JsonInclude.Value findPropertyInclusion(Annotated a) {
+    public JsonInclude.Value findPropertyInclusion(MapperConfig<?> config, Annotated a) {
         return JsonInclude.Value.empty();
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Serialization: type refinements
-    /**********************************************************
+    /**********************************************************************
      */
-
-    /**
-     * Method for accessing annotated type definition that a
-     * method/field can have, to be used as the type for serialization
-     * instead of the runtime type.
-     * Type returned (if any) needs to be widening conversion (super-type).
-     * Declared return type of the method is also considered acceptable.
-     *
-     * @return Class to use instead of runtime type
-     *
-     * @deprecated Since 2.7 call {@link #refineSerializationType} instead
-     */
-    @Deprecated // since 2.7
-    public Class<?> findSerializationType(Annotated a) {
-        return null;
-    }
-
-    /**
-     * Method for finding possible widening type definition that a property
-     * value can have, to define less specific key type to use for serialization.
-     * It should be only be used with {@link java.util.Map} types.
-     * 
-     * @return Class specifying more general type to use instead of
-     *   declared type, if annotation found; null if not
-     *
-     * @deprecated Since 2.7 call {@link #refineSerializationType} instead
-     */
-    @Deprecated // since 2.7
-    public Class<?> findSerializationKeyType(Annotated am, JavaType baseType) {
-        return null;
-    }
-
-    /**
-     * Method for finding possible widening type definition that a property
-     * value can have, to define less specific key type to use for serialization.
-     * It should be only used with structured types (arrays, collections, maps).
-     * 
-     * @return Class specifying more general type to use instead of
-     *   declared type, if annotation found; null if not
-     *
-     * @deprecated Since 2.7 call {@link #refineSerializationType} instead
-     */
-    @Deprecated // since 2.7
-    public Class<?> findSerializationContentType(Annotated am, JavaType baseType) {
-        return null;
-    }
 
     /**
      * Method called to find out possible type refinements to use
-     * for deserialization.
-     *
-     * @since 2.7
+     * for deserialization, including not just value itself but
+     * key and/or content type, if type has those.
      */
     public JavaType refineSerializationType(final MapperConfig<?> config,
             final Annotated a, final JavaType baseType) throws JsonMappingException
     {
-        JavaType type = baseType;
-        final TypeFactory tf = config.getTypeFactory();
-        
-        // 10-Oct-2015, tatu: For 2.7, we'll need to delegate back to
-        //    now-deprecated secondary methods; this because while
-        //    direct sub-class not yet retrofitted may only override
-        //    those methods. With 2.8 or later we may consider removal
-        //    of these methods
-
-        
-        // Ok: start by refining the main type itself; common to all types
-        Class<?> serClass = findSerializationType(a);
-        if (serClass != null) {
-            if (type.hasRawClass(serClass)) {
-                // 30-Nov-2015, tatu: As per [databind#1023], need to allow forcing of
-                //    static typing this way
-                type = type.withStaticTyping();
-            } else {
-                Class<?> currRaw = type.getRawClass();
-                try {
-                    // 11-Oct-2015, tatu: For deser, we call `TypeFactory.constructSpecializedType()`,
-                    //   may be needed here too in future?
-                    if (serClass.isAssignableFrom(currRaw)) { // common case
-                        type = tf.constructGeneralizedType(type, serClass);
-                    } else if (currRaw.isAssignableFrom(serClass)) { // specialization, ok as well
-                        type = tf.constructSpecializedType(type, serClass);
-                    } else {
-                        throw new JsonMappingException(null,
-                                String.format("Can not refine serialization type %s into %s; types not related",
-                                        type, serClass.getName()));
-                    }
-                } catch (IllegalArgumentException iae) {
-                    throw new JsonMappingException(null,
-                            String.format("Failed to widen type %s with annotation (value %s), from '%s': %s",
-                                    type, serClass.getName(), a.getName(), iae.getMessage()),
-                                    iae);
-                }
-            }
-        }
-        // Then further processing for container types
-
-        // First, key type (for Maps, Map-like types):
-        if (type.isMapLikeType()) {
-            JavaType keyType = type.getKeyType();
-            Class<?> keyClass = findSerializationKeyType(a, keyType);
-            if (keyClass != null) {
-                if (keyType.hasRawClass(keyClass)) {
-                    keyType = keyType.withStaticTyping();
-                } else {
-                    Class<?> currRaw = keyType.getRawClass();
-                    try {
-                        // 19-May-2016, tatu: As per [databind#1231], [databind#1178] may need to actually
-                        //   specialize (narrow) type sometimes, even if more commonly opposite
-                        //   is needed.
-                        if (keyClass.isAssignableFrom(currRaw)) { // common case
-                            keyType = tf.constructGeneralizedType(keyType, keyClass);
-                        } else if (currRaw.isAssignableFrom(keyClass)) { // specialization, ok as well
-                            keyType = tf.constructSpecializedType(keyType, keyClass);
-                        } else {
-                            throw new JsonMappingException(null,
-                                    String.format("Can not refine serialization key type %s into %s; types not related",
-                                            keyType, keyClass.getName()));
-                        }
-                    } catch (IllegalArgumentException iae) {
-                        throw new JsonMappingException(null,
-                                String.format("Failed to widen key type of %s with concrete-type annotation (value %s), from '%s': %s",
-                                        type, keyClass.getName(), a.getName(), iae.getMessage()),
-                                        iae);
-                    }
-                }
-                type = ((MapLikeType) type).withKeyType(keyType);
-            }
-        }
-
-        JavaType contentType = type.getContentType();
-        if (contentType != null) { // collection[like], map[like], array, reference
-            // And then value types for all containers:
-           Class<?> contentClass = findSerializationContentType(a, contentType);
-           if (contentClass != null) {
-               if (contentType.hasRawClass(contentClass)) {
-                   contentType = contentType.withStaticTyping();
-               } else {
-                   // 03-Apr-2016, tatu: As per [databind#1178], may need to actually
-                   //   specialize (narrow) type sometimes, even if more commonly opposite
-                   //   is needed.
-                   Class<?> currRaw = contentType.getRawClass();
-                   try {
-                       if (contentClass.isAssignableFrom(currRaw)) { // common case
-                           contentType = tf.constructGeneralizedType(contentType, contentClass);
-                       } else if (currRaw.isAssignableFrom(contentClass)) { // specialization, ok as well
-                           contentType = tf.constructSpecializedType(contentType, contentClass);
-                       } else {
-                           throw new JsonMappingException(null,
-                                   String.format("Can not refine serialization content type %s into %s; types not related",
-                                           contentType, contentClass.getName()));
-                       }
-                   } catch (IllegalArgumentException iae) { // shouldn't really happen
-                       throw new JsonMappingException(null,
-                               String.format("Internal error: failed to refine value type of %s with concrete-type annotation (value %s), from '%s': %s",
-                                       type, contentClass.getName(), a.getName(), iae.getMessage()),
-                                       iae);
-                   }
-               }
-               type = type.withContentType(contentType);
-           }
-        }
-        return type;
+        return baseType;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Serialization: class annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method for accessing defined property serialization order (which may be
      * partial). May return null if no ordering is defined.
      */
-    public String[] findSerializationPropertyOrder(AnnotatedClass ac) {
+    public String[] findSerializationPropertyOrder(MapperConfig<?> config, AnnotatedClass ac) {
         return null;
     }
 
@@ -957,23 +792,21 @@ public abstract class AnnotationIntrospector
      * for which no explicit is defined should be alphabetically (lexicograpically)
      * ordered
      */
-    public Boolean findSerializationSortAlphabetically(Annotated ann) {
+    public Boolean findSerializationSortAlphabetically(MapperConfig<?> config, Annotated ann) {
         return null;
     }
 
     /**
      * Method for adding possible virtual properties to be serialized along
      * with regular properties.
-     * 
-     * @since 2.5
      */
     public void findAndAddVirtualProperties(MapperConfig<?> config, AnnotatedClass ac,
             List<BeanPropertyWriter> properties) { }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Serialization: property annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -987,18 +820,8 @@ public abstract class AnnotationIntrospector
      * @param a Property accessor to check
      * 
      * @return Name to use if found; null if not.
-     * 
-     * @since 2.1
      */
-    public PropertyName findNameForSerialization(Annotated a) {
-        /*
-        if (name != null) {
-            if (name.length() == 0) { // empty String means 'default'
-                return PropertyName.USE_DEFAULT;
-            }
-            return new PropertyName(name);
-        }
-        */
+    public PropertyName findNameForSerialization(MapperConfig<?> config, Annotated a) {
         return null;
     }
 
@@ -1008,94 +831,102 @@ public abstract class AnnotationIntrospector
      * should be used as "the value" of the object instance; usually
      * serialized as a primitive value such as String or number.
      *
-     * @return True if such annotation is found (and is not disabled);
-     *   false if no enabled annotation is found
+     * @return {@link Boolean#TRUE} if such annotation is found and is not disabled;
+     *   {@link Boolean#FALSE} if disabled annotation (block) is found (to indicate
+     *   accessor is definitely NOT to be used "as value"); or `null` if no
+     *   information found.
      */
-    public boolean hasAsValueAnnotation(AnnotatedMethod am) {
-        return false;
+    public Boolean hasAsValue(MapperConfig<?> config, Annotated a) {
+        return null;
     }
 
     /**
-     * Method for determining the String value to use for serializing
-     * given enumeration entry; used when serializing enumerations
-     * as Strings (the standard method).
+     * Method for checking whether given method has an annotation
+     * that suggests that the method is to serve as "any setter";
+     * method to be used for accessing set of miscellaneous "extra"
+     * properties, often bound with matching "any setter" method.
      *
-     * @return Serialized enum value.
-     *
-     * @deprecated Since 2.8: use {@link #findEnumValues} instead because this method
-     *    does not properly handle override settings (defaults to <code>enum.name</code>
-     *    without indicating whether that is explicit or not), and is inefficient to
-     *    call one-by-one.
+     * @param ann Annotated entity to check
+     * 
+     * @return True if such annotation is found (and is not disabled),
+     *   false otherwise
      */
-    @Deprecated
-    public String findEnumValue(Enum<?> value) {
-        return value.name();
+    public Boolean hasAnyGetter(MapperConfig<?> config, Annotated ann) {
+        return null;
     }
 
     /**
      * Method for efficiently figuring out which if given set of <code>Enum</code> values
      * have explicitly defined name. Method will overwrite entries in incoming <code>names</code>
      * array with explicit names found, if any, leaving other entries unmodified.
-     *<p>
-     * Default implementation will simply delegate to {@link #findEnumValue}, which is close
-     * enough, although unfortunately NOT 100% equivalent (as it will also consider <code>name()</code>
-     * to give explicit value).
      *
-     * @since 2.7
+     * @param enumType Type of Enumeration
+     * @param enumValues Values of enumeration
+     * @param names Matching declared names of enumeration values (with indexes
+     *     matching {@code enumValues} entries)
+     *
+     * @return Array of names to use (possible {@code names} passed as argument)
      */
-    public  String[] findEnumValues(Class<?> enumType, Enum<?>[] enumValues, String[] names) {
-        for (int i = 0, len = enumValues.length; i < len; ++i) {
-            /* 12-Mar-2016, tatu: This is quite tricky, considering that we should NOT
-             *   overwrite values with default `name`... so for now, let's only delegate
-             *   if no value has been set. Still not optimal but has to do
-             */
-            // TODO: In 2.8, stop delegation?
-            if (names[i] == null) {
-                names[i] = findEnumValue(enumValues[i]);
-            }
-        }
+    public String[] findEnumValues(MapperConfig<?> config,
+            Class<?> enumType, Enum<?>[] enumValues, String[] names) {
         return names;
+    }
+
+    /**
+     * Method that is related to {@link #findEnumValues} but is called to check if
+     * there are alternative names (aliased) that can be accepted for entries, in 
+     * addition to primary names introspected earlier.
+     * If so, these aliases should be returned in {@code aliases} {@link List} passed
+     * as argument (and initialized for proper size by caller).
+     *
+     * @param enumType Type of Enumeration
+     * @param enumValues Values of enumeration
+     * @param aliases (in/out) Pre-allocated array where aliases found, if any, may be
+     *     added (in indexes matching those of {@code enumValues})
+     */
+    public void findEnumAliases(MapperConfig<?> config,
+            Class<?> enumType, Enum<?>[] enumValues, String[][] aliases) {
+        ;
     }
 
     /**
      * Finds the Enum value that should be considered the default value, if possible.
      *
      * @param enumCls The Enum class to scan for the default value.
-     * @return null if none found or it's not possible to determine one.
      *
-     * @since 2.8
+     * @return null if none found or it's not possible to determine one.
      */
-    public Enum<?> findDefaultEnumValue(Class<Enum<?>> enumCls) {
+    public Enum<?> findDefaultEnumValue(MapperConfig<?> config, 
+            Class<Enum<?>> enumCls) {
         return null;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Deserialization: general annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method for getting a deserializer definition on specified method
      * or field.
-     * Type of definition is either instance (of type
-     * {@link JsonDeserializer}) or Class (of type
-     * {@code Class<JsonDeserializer>}): if value of different
+     * Type of definition is either instance (of type {@link JsonDeserializer})
+     * or Class (of type  {@code Class&<JsonDeserializer>});
      * type is returned, a runtime exception may be thrown by caller.
      */
-    public Object findDeserializer(Annotated am) {
+    public Object findDeserializer(MapperConfig<?> config, Annotated am) {
         return null;
     }
 
     /**
      * Method for getting a deserializer definition for keys of
      * associated <code>Map</code> property.
-     * Type of definition is either instance (of type
-     * {@link JsonDeserializer}) or Class (of type
-     * {@code Class<JsonDeserializer>}): if value of different
+     * Type of definition is either instance (of type {@link JsonDeserializer})
+     * or Class (of type  {@code Class<JsonDeserializer>});
+     * if value of different
      * type is returned, a runtime exception may be thrown by caller.
      */
-    public Object findKeyDeserializer(Annotated am) {
+    public Object findKeyDeserializer(MapperConfig<?> config, Annotated am) {
         return null;
     }
 
@@ -1103,12 +934,12 @@ public abstract class AnnotationIntrospector
      * Method for getting a deserializer definition for content (values) of
      * associated <code>Collection</code>, <code>array</code> or
      * <code>Map</code> property.
-     * Type of definition is either instance (of type
-     * {@link JsonDeserializer}) or Class (of type
-     * {@code Class<JsonDeserializer>}): if value of different
+     * Type of definition is either instance (of type {@link JsonDeserializer})
+     * or Class (of type  {@code Class<JsonDeserializer>});
+     * if value of different
      * type is returned, a runtime exception may be thrown by caller.
      */
-    public Object findContentDeserializer(Annotated am) {
+    public Object findContentDeserializer(MapperConfig<?> config, Annotated am) {
         return null;
     }
 
@@ -1129,12 +960,9 @@ public abstract class AnnotationIntrospector
      * type handling, or object identity handling; if such features are needed
      * an explicit deserializer is usually better way to handle deserialization.
      * 
-     * @param a Annotated property (field, method) or class to check for
-     *   annotations
-     *   
-     * @since 2.2
+     * @param a Annotated property (field, method) or class to check for annotations
      */
-    public Object findDeserializationConverter(Annotated a) {
+    public Object findDeserializationConverter(MapperConfig<?> config, Annotated a) {
         return null;
     }
 
@@ -1153,152 +981,41 @@ public abstract class AnnotationIntrospector
      * Other notes are same as those for {@link #findDeserializationConverter}
      * 
      * @param a Annotated property (field, method) to check.
-     *   
-     * @since 2.2
      */
-    public Object findDeserializationContentConverter(AnnotatedMember a) {
+    public Object findDeserializationContentConverter(MapperConfig<?> config, AnnotatedMember a) {
         return null;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Deserialization: type refinements
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method called to find out possible type refinements to use
      * for deserialization.
-     *
-     * @since 2.7
      */
-    public JavaType refineDeserializationType(final MapperConfig<?> config,
+    public JavaType refineDeserializationType(MapperConfig<?> config,
             final Annotated a, final JavaType baseType) throws JsonMappingException
     {
-        JavaType type = baseType;
-        final TypeFactory tf = config.getTypeFactory();
-
-        // 10-Oct-2015, tatu: For 2.7, we'll need to delegate back to
-        //    now-deprecated secondary methods; this because while
-        //    direct sub-class not yet retrofitted may only override
-        //    those methods. With 2.8 or later we may consider removal
-        //    of these methods
-
-        
-        // Ok: start by refining the main type itself; common to all types
-        Class<?> valueClass = findDeserializationType(a, type);
-        if ((valueClass != null) && !type.hasRawClass(valueClass)) {
-            try {
-                type = tf.constructSpecializedType(type, valueClass);
-            } catch (IllegalArgumentException iae) {
-                throw new JsonMappingException(null,
-                        String.format("Failed to narrow type %s with annotation (value %s), from '%s': %s",
-                                type, valueClass.getName(), a.getName(), iae.getMessage()),
-                                iae);
-            }
-        }
-        // Then further processing for container types
-
-        // First, key type (for Maps, Map-like types):
-        if (type.isMapLikeType()) {
-            JavaType keyType = type.getKeyType();
-            Class<?> keyClass = findDeserializationKeyType(a, keyType);
-            if (keyClass != null) {
-                try {
-                    keyType = tf.constructSpecializedType(keyType, keyClass);
-                    type = ((MapLikeType) type).withKeyType(keyType);
-                } catch (IllegalArgumentException iae) {
-                    throw new JsonMappingException(null,
-                            String.format("Failed to narrow key type of %s with concrete-type annotation (value %s), from '%s': %s",
-                                    type, keyClass.getName(), a.getName(), iae.getMessage()),
-                                    iae);
-                }
-            }
-        }
-        JavaType contentType = type.getContentType();
-        if (contentType != null) { // collection[like], map[like], array, reference
-            // And then value types for all containers:
-           Class<?> contentClass = findDeserializationContentType(a, contentType);
-           if (contentClass != null) {
-               try {
-                   contentType = tf.constructSpecializedType(contentType, contentClass);
-                   type = type.withContentType(contentType);
-               } catch (IllegalArgumentException iae) {
-                   throw new JsonMappingException(null,
-                           String.format("Failed to narrow value type of %s with concrete-type annotation (value %s), from '%s': %s",
-                                   type, contentClass.getName(), a.getName(), iae.getMessage()),
-                                   iae);
-               }
-           }
-        }
-        return type;
-    }
-    
-    /**
-     * Method for accessing annotated type definition that a
-     * property can have, to be used as the type for deserialization
-     * instead of the static (declared) type.
-     * Type is usually narrowing conversion (i.e.subtype of declared type).
-     * Declared return type of the method is also considered acceptable.
-     *
-     * @param baseType Assumed type before considering annotations
-     *
-     * @return Class to use for deserialization instead of declared type
-     *
-     * @deprecated Since 2.7 call {@link #refineDeserializationType} instead
-     */
-    @Deprecated
-    public Class<?> findDeserializationType(Annotated am, JavaType baseType) {
-        return null;
-    }
-    
-    /**
-     * Method for accessing additional narrowing type definition that a
-     * method can have, to define more specific key type to use.
-     * It should be only be used with {@link java.util.Map} types.
-     * 
-     * @param baseKeyType Assumed key type before considering annotations
-     *
-     * @return Class specifying more specific type to use instead of
-     *   declared type, if annotation found; null if not
-     *
-     * @deprecated Since 2.7 call {@link #refineDeserializationType} instead
-     */
-    @Deprecated
-    public Class<?> findDeserializationKeyType(Annotated am, JavaType baseKeyType) {
-        return null;
-    }
-
-    /**
-     * Method for accessing additional narrowing type definition that a
-     * method can have, to define more specific content type to use;
-     * content refers to Map values and Collection/array elements.
-     * It should be only be used with Map, Collection and array types.
-     * 
-     * @param baseContentType Assumed content (value) type before considering annotations
-     *
-     * @return Class specifying more specific type to use instead of
-     *   declared type, if annotation found; null if not
-     *
-     * @deprecated Since 2.7 call {@link #refineDeserializationType} instead
-     */
-    @Deprecated
-    public Class<?> findDeserializationContentType(Annotated am, JavaType baseContentType) {
-        return null;
+        return baseType;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Deserialization: class annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
      * Method getting {@link ValueInstantiator} to use for given
      * type (class): return value can either be an instance of
      * instantiator, or class of instantiator to create.
+     *
+     * @param ac Annotated class to introspect
      */
-    public Object findValueInstantiator(AnnotatedClass ac) {
+    public Object findValueInstantiator(MapperConfig<?> config, AnnotatedClass ac) {
         return null;
     }
 
@@ -1312,24 +1029,24 @@ public abstract class AnnotationIntrospector
      * method does not allow returning instances: the reason is
      * that builders have state, and a separate instance needs
      * to be created for each deserialization call.
-     * 
-     * @since 2.0
+     *
+     * @param ac Annotated class to introspect
      */
-    public Class<?> findPOJOBuilder(AnnotatedClass ac) {
+    public Class<?> findPOJOBuilder(MapperConfig<?> config, AnnotatedClass ac) {
         return null;
     }
 
     /**
-     * @since 2.0
+     * @param ac Annotated class to introspect
      */
-    public JsonPOJOBuilder.Value findPOJOBuilderConfig(AnnotatedClass ac) {
+    public JsonPOJOBuilder.Value findPOJOBuilderConfig(MapperConfig<?> config, AnnotatedClass ac) {
         return null;
     }
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Deserialization: property annotations
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -1340,21 +1057,11 @@ public abstract class AnnotationIntrospector
      * is found; otherwise a non-null name (possibly
      * {@link PropertyName#USE_DEFAULT}, which means "use default heuristics").
      * 
-     * @param a Property accessor to check
-     * 
+     * @param ann Annotated entity to check
+     *
      * @return Name to use if found; null if not.
-     * 
-     * @since 2.1
      */
-    public PropertyName findNameForDeserialization(Annotated a) {
-        /*
-        if (name != null) {
-            if (name.length() == 0) { // empty String means 'default'
-                return PropertyName.USE_DEFAULT;
-            }
-            return new PropertyName(name);
-        }
-        */
+    public PropertyName findNameForDeserialization(MapperConfig<?> config, Annotated ann) {
         return null;
     }
     
@@ -1363,58 +1070,52 @@ public abstract class AnnotationIntrospector
      * that suggests that the method is to serve as "any setter";
      * method to be used for setting values of any properties for
      * which no dedicated setter method is found.
-     *
-     * @return True if such annotation is found (and is not disabled),
-     *   false otherwise
-     */
-    public boolean hasAnySetterAnnotation(AnnotatedMethod am) {
-        return false;
-    }
-
-    /**
-     * Method for checking whether given method has an annotation
-     * that suggests that the method is to serve as "any setter";
-     * method to be used for accessing set of miscellaneous "extra"
-     * properties, often bound with matching "any setter" method.
-     *
-     * @return True if such annotation is found (and is not disabled),
-     *   false otherwise
-     */
-    public boolean hasAnyGetterAnnotation(AnnotatedMethod am) {
-        return false;
-    }
-    
-    /**
-     * Method for checking whether given annotated item (method, constructor)
-     * has an annotation
-     * that suggests that the method is a "creator" (aka factory)
-     * method to be used for construct new instances of deserialized
-     * values.
-     *
-     * @return True if such annotation is found (and is not disabled),
-     *   false otherwise
-     */
-    public boolean hasCreatorAnnotation(Annotated a) {
-        return false;
-    }
-
-    /**
-     * Method for finding indication of creator binding mode for
-     * a creator (something for which {@link #hasCreatorAnnotation} returns
-     * true), for cases where there may be ambiguity (currently: single-argument
-     * creator with implicit but no explicit name for the argument).
      * 
-     * @since 2.5
+     * @param ann Annotated entity to check
+     *
+     * @return True if such annotation is found (and is not disabled),
+     *   false otherwise
      */
-    public JsonCreator.Mode findCreatorBinding(Annotated a) {
+    public Boolean hasAnySetter(MapperConfig<?> config, Annotated ann) {
         return null;
     }
-    
+
+    /**
+     * Method for finding possible settings for property, given annotations
+     * on an accessor.
+     */
+    public JsonSetter.Value findSetterInfo(MapperConfig<?> config, Annotated a) {
+        return JsonSetter.Value.empty();
+    }
+
+    /**
+     * Method for finding merge settings for property, if any.
+     */
+    public Boolean findMergeInfo(MapperConfig<?> config, Annotated a) {
+        return null;
+    }
+
+    /**
+     * Method called to check whether potential Creator (constructor or static factory
+     * method) has explicit annotation to indicate it as actual Creator; and if so,
+     * which {@link com.fasterxml.jackson.annotation.JsonCreator.Mode} to use.
+     *<p>
+     * NOTE: caller needs to consider possibility of both `null` (no annotation found)
+     * and {@link com.fasterxml.jackson.annotation.JsonCreator.Mode#DISABLED} (annotation found,
+     * but disabled); latter is necessary as marker in case multiple introspectors are chained,
+     * as well as possibly as when using mix-in annotations.
+     *
+     * @param config Configuration settings in effect (for serialization or deserialization)
+     * @param a Annotated accessor (usually constructor or static method) to check
+     */
+    public JsonCreator.Mode findCreatorAnnotation(MapperConfig<?> config, Annotated a) {
+        return null;
+    }
+
     /*
-    /**********************************************************
-    /* Overridable methods: may be used as low-level extension
-    /* points.
-    /**********************************************************
+    /**********************************************************************
+    /* Overridable methods: may be used as low-level extension points.
+    /**********************************************************************
      */
 
     /**
@@ -1428,12 +1129,16 @@ public abstract class AnnotationIntrospector
      *<code>
      *  return annotated.getAnnotation(annoClass);
      *</code>
-     * 
-     * @since 2.5
+     *
+     * @param ann Annotated entity to check for specified annotation
+     * @param annoClass Type of annotation to find
+     *
+     * @return Value of given annotation (as per {@code annoClass}), if entity
+     *    has one; {@code null} otherwise
      */
-    protected <A extends Annotation> A _findAnnotation(Annotated annotated,
+    protected <A extends Annotation> A _findAnnotation(Annotated ann,
             Class<A> annoClass) {
-        return annotated.getAnnotation(annoClass);
+        return ann.getAnnotation(annoClass);
     }
 
     /**
@@ -1446,20 +1151,27 @@ public abstract class AnnotationIntrospector
      *<code>
      *  return annotated.hasAnnotation(annoClass);
      *</code>
-     * 
-     * @since 2.5
+     *
+     * @param ann Annotated entity to check for specified annotation
+     * @param annoClass Type of annotation to find
+     *
+     * @return {@code true} if specified annotation exists in given entity; {@code false} if not
      */
-    protected boolean _hasAnnotation(Annotated annotated, Class<? extends Annotation> annoClass) {
-        return annotated.hasAnnotation(annoClass);
+    protected boolean _hasAnnotation(Annotated ann, Class<? extends Annotation> annoClass) {
+        return ann.hasAnnotation(annoClass);
     }
 
     /**
      * Alternative lookup method that is used to see if annotation has at least one of
      * annotations of types listed in second argument.
      *
-     * @since 2.7
+     * @param ann Annotated entity to check for specified annotation
+     * @param annoClasses Types of annotation to find
+     *
+     * @return {@code true} if at least one of specified annotation exists in given entity;
+     *    {@code false} otherwise
      */
-    protected boolean _hasOneOf(Annotated annotated, Class<? extends Annotation>[] annoClasses) {
-        return annotated.hasOneOf(annoClasses);
+    protected boolean _hasOneOf(Annotated ann, Class<? extends Annotation>[] annoClasses) {
+        return ann.hasOneOf(annoClasses);
     }
 }

@@ -14,7 +14,6 @@ import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
  * (standard Java 64-bit timestamp) or textual formats (usually ISO-8601).
  */
 @JacksonStdImpl
-@SuppressWarnings("serial")
 public class CalendarSerializer
     extends DateTimeSerializerBase<Calendar>
 {
@@ -37,19 +36,12 @@ public class CalendarSerializer
     }
 
     @Override
-    public void serialize(Calendar value, JsonGenerator jgen, SerializerProvider provider) throws IOException
+    public void serialize(Calendar value, JsonGenerator g, SerializerProvider provider) throws IOException
     {
         if (_asTimestamp(provider)) {
-            jgen.writeNumber(_timestamp(value));
-        } else if (_customFormat != null) {
-            // 21-Feb-2011, tatu: not optimal, but better than alternatives:
-            synchronized (_customFormat) {
-                // _customformat cannot parse Calendar, so Date should be passed
-                jgen.writeString(_customFormat.format(value.getTime()));
-            }
-        } else {
-            provider.defaultSerializeDateValue(value.getTime(), jgen);
+            g.writeNumber(_timestamp(value));
+            return;
         }
+        _serializeAsString(value.getTime(), g, provider);
     }
-
 }

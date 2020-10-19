@@ -1,9 +1,9 @@
 package com.fasterxml.jackson.databind.ser;
 
 import java.io.IOException;
-import java.io.StringWriter;
 import java.util.*;
 
+import com.fasterxml.jackson.annotation.JsonFilter;
 import com.fasterxml.jackson.core.JsonGenerator;
 
 import com.fasterxml.jackson.databind.*;
@@ -27,7 +27,8 @@ public class TestIterable extends BaseMapTest
             return _ints.iterator();
         }
     }
-    // [JACKSON-689]
+
+    @JsonSerialize(typing=JsonSerialize.Typing.STATIC)
     static class BeanWithIterable {
         private final ArrayList<String> values = new ArrayList<String>();
         {
@@ -35,6 +36,15 @@ public class TestIterable extends BaseMapTest
         }
 
         public Iterable<String> getValues() { return values; }
+    }
+
+    static class BeanWithIterator {
+        private final ArrayList<String> values = new ArrayList<String>();
+        {
+            values.add("itValue");
+        }
+
+        public Iterator<String> getValues() { return values.iterator(); }
     }
 
     static class IntIterable implements Iterable<Integer>
@@ -90,46 +100,84 @@ public class TestIterable extends BaseMapTest
         }
     }
 
+    // [databind#2390]
+    @JsonFilter("default")
+    static class IntIterable2390 extends IntIterable { }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Test methods
-    /**********************************************************
+    /**********************************************************************
      */
 
-    private final static ObjectMapper MAPPER = new ObjectMapper();
-    
+    private final ObjectMapper MAPPER = new ObjectMapper();
+
+    private final ObjectMapper STATIC_MAPPER = jsonMapperBuilder()
+        .enable(MapperFeature.USE_STATIC_TYPING)
+        .build();
+
     public void testIterator() throws IOException
     {
-        StringWriter sw = new StringWriter();
         ArrayList<Integer> l = new ArrayList<Integer>();
         l.add(1);
+        l.add(null);
         l.add(-9);
         l.add(0);
-        MAPPER.writeValue(sw, l.iterator());
-        assertEquals("[1,-9,0]", sw.toString().trim());
+        
+        assertEquals("[1,null,-9,0]", MAPPER.writeValueAsString(l.iterator()));
+        l.clear();
+        assertEquals("[]", MAPPER.writeValueAsString(l.iterator()));
     }
 
     public void testIterable() throws IOException
     {
-        StringWriter sw = new StringWriter();
-        MAPPER.writeValue(sw, new IterableWrapper(new int[] { 1, 2, 3 }));
-        assertEquals("[1,2,3]", sw.toString().trim());
+        assertEquals("[1,2,3]",
+                MAPPER.writeValueAsString(new IterableWrapper(new int[] { 1, 2, 3 })));
     }
 
-    // [JACKSON-689], [JACKSON-876]
     public void testWithIterable() throws IOException
     {
-        // 689:
+        assertEquals("{\"values\":[\"value\"]}",
+                STATIC_MAPPER.writeValueAsString(new BeanWithIterable()));
+        assertEquals("[1,2,3]",
+                STATIC_MAPPER.writeValueAsString(new IntIterable()));
+
         assertEquals("{\"values\":[\"value\"]}",
                 MAPPER.writeValueAsString(new BeanWithIterable()));
-        // 876:
         assertEquals("[1,2,3]",
                 MAPPER.writeValueAsString(new IntIterable()));
+        
+        // 17-Apr-2018, tatu: Turns out we may need "fresh" mapper for some failures?
+        ObjectMapper freshMapper = new ObjectMapper();
+        assertEquals("{\"values\":[\"value\"]}",
+                freshMapper.writeValueAsString(new BeanWithIterable()));
+        assertEquals("[1,2,3]",
+                freshMapper.writeValueAsString(new IntIterable()));
     }
     
+    public void testWithIterator() throws IOException
+    {
+        assertEquals("{\"values\":[\"itValue\"]}",
+                STATIC_MAPPER.writeValueAsString(new BeanWithIterator()));
+
+        // [databind#1977]
+        ArrayList<Number> numbersList = new ArrayList<>();
+        numbersList.add(1);
+        numbersList.add(0.25);
+        String json = MAPPER.writeValueAsString(numbersList.iterator());
+        assertEquals("[1,0.25]", json);
+    }
+
     // [databind#358]
     public void testIterable358() throws Exception {
         String json = MAPPER.writeValueAsString(new B());
         assertEquals("{\"list\":[[\"Hello world.\"]]}", json);
+    }
+
+    // [databind#2390]
+    public void testIterableWithAnnotation() throws Exception
+    {
+        assertEquals("[1,2,3]",
+                STATIC_MAPPER.writeValueAsString(new IntIterable2390()));
     }
 }

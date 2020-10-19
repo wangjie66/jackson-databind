@@ -5,9 +5,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 
 import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.core.io.NumberOutput;
 import com.fasterxml.jackson.databind.SerializerProvider;
-
 
 /**
  * Numeric node that contains simple 64-bit integer values.
@@ -15,6 +13,8 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 public class LongNode
     extends NumericNode
 {
+    private static final long serialVersionUID = 3L;
+
     protected final long _value;
 
     /* 
@@ -78,7 +78,7 @@ public class LongNode
 
     @Override
     public String asText() {
-        return NumberOutput.toString(_value);
+        return String.valueOf(_value);
     }
 
     @Override

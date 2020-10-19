@@ -3,28 +3,16 @@ package com.fasterxml.jackson.databind.deser.std;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.deser.ValueInstantiator;
 import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
 
 public class AtomicReferenceDeserializer
     extends ReferenceTypeDeserializer<AtomicReference<Object>>
 {
-    private static final long serialVersionUID = 1L;
-
-    /*
-    /**********************************************************
-    /* Life-cycle
-    /**********************************************************
-     */
-
-    @Deprecated // since 2.8
-    public AtomicReferenceDeserializer(JavaType fullType) {
-        this(fullType, null, null);
-    }
-
-    public AtomicReferenceDeserializer(JavaType fullType,
+    public AtomicReferenceDeserializer(JavaType fullType, ValueInstantiator inst,
             TypeDeserializer typeDeser, JsonDeserializer<?> deser)
     {
-        super(fullType, typeDeser, deser);
+        super(fullType, inst, typeDeser, deser);
     }
 
     /*
@@ -35,12 +23,22 @@ public class AtomicReferenceDeserializer
 
     @Override
     public AtomicReferenceDeserializer withResolved(TypeDeserializer typeDeser, JsonDeserializer<?> valueDeser) {
-        return new AtomicReferenceDeserializer(_fullType, typeDeser, valueDeser);
+        return new AtomicReferenceDeserializer(_fullType, _valueInstantiator,
+                typeDeser, valueDeser);
     }
 
     @Override
-    public AtomicReference<Object> getNullValue(DeserializationContext ctxt) {
-        return new AtomicReference<Object>();
+    public AtomicReference<Object> getNullValue(DeserializationContext ctxt) throws JsonMappingException {
+        // 07-May-2019, tatu: [databind#2303], needed for nested ReferenceTypes
+        return new AtomicReference<Object>(_valueDeserializer.getNullValue(ctxt));
+    }
+
+    @Override
+    public Object getEmptyValue(DeserializationContext ctxt) throws JsonMappingException {
+        // 07-May-2019, tatu: I _think_ this needs to align with "null value" and
+        //    not necessarily with empty value of contents? (used to just do "absent"
+        //    so either way this seems to me like an improvement)
+        return getNullValue(ctxt);
     }
 
     @Override
@@ -48,29 +46,20 @@ public class AtomicReferenceDeserializer
         return new AtomicReference<Object>(contents);
     }
 
-    /*
     @Override
-    public Object deserializeWithType(JsonParser p, DeserializationContext ctxt,
-            TypeDeserializer typeDeser) throws IOException
-    {
-        final JsonToken t = p.getCurrentToken();
-        if (t == JsonToken.VALUE_NULL) { // can this actually happen?
-            return getNullValue(ctxt);
-        }
-        // 22-Oct-2015, tatu: This handling is probably not needed (or is wrong), but
-        //   could be result of older (pre-2.7) Jackson trying to serialize natural types.
-        //  Because of this, let's allow for now, unless proven problematic
-        if ((t != null) && t.isScalarValue()) {
-            return deserialize(p, ctxt);
-        }
-        // 19-Apr-2016, tatu: Alas, due to there not really being anything for AtomicReference
-        //   itself, need to just ignore `typeDeser`, use TypeDeserializer we do have for contents
-        //   and it might just work.
-
-        if (_valueTypeDeserializer == null) {
-            return deserialize(p, ctxt);
-        }
-        return new AtomicReference<Object>(_valueTypeDeserializer.deserializeTypedFromAny(p, ctxt));
+    public Object getReferenced(AtomicReference<Object> reference) {
+        return reference.get();
     }
-    */
+
+    @Override // since 2.9
+    public AtomicReference<Object> updateReference(AtomicReference<Object> reference, Object contents) {
+        reference.set(contents);
+        return reference;
+    }
+
+    @Override // since 2.9
+    public Boolean supportsUpdate(DeserializationConfig config) {
+        // yes; regardless of value deserializer reference itself may be updated
+        return Boolean.TRUE;
+    }
 }

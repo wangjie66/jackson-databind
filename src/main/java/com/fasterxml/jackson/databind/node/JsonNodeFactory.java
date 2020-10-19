@@ -3,6 +3,7 @@ package com.fasterxml.jackson.databind.node;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.util.RawValue;
 
 /**
@@ -13,10 +14,9 @@ import com.fasterxml.jackson.databind.util.RawValue;
  * to behavior of node types, mostly) is needed.
  */
 public class JsonNodeFactory
-    implements java.io.Serializable, // since 2.1
-        JsonNodeCreator // since 2.3
+    implements java.io.Serializable,
+        JsonNodeCreator
 {
-    // with 2.2
     private static final long serialVersionUID = 1L;
 
     private final boolean _cfgBigDecimalExact;
@@ -101,6 +101,9 @@ public class JsonNodeFactory
         return v ? BooleanNode.getTrue() : BooleanNode.getFalse();
     }
 
+    @Override
+    public JsonNode missingNode() { return MissingNode.getInstance(); }
+
     /**
      * Factory method for getting an instance of JSON null node (which
      * represents literal null value)
@@ -183,11 +186,11 @@ public class JsonNodeFactory
      * {@link NumericNode}, but just {@link ValueNode}.
      */
     @Override
-    public ValueNode numberNode(Long value) {
-        if (value == null) {
+    public ValueNode numberNode(Long v) {
+        if (v == null) {
             return nullNode();
         }
-        return LongNode.valueOf(value.longValue());
+        return LongNode.valueOf(v.longValue());
     }
 
     /**
@@ -195,7 +198,12 @@ public class JsonNodeFactory
      * that expresses given unlimited range integer value
      */
     @Override
-    public NumericNode numberNode(BigInteger v) { return BigIntegerNode.valueOf(v); }
+    public ValueNode numberNode(BigInteger v) {
+        if (v == null) {
+            return nullNode();
+        }
+        return BigIntegerNode.valueOf(v);
+    }
 
     /**
      * Factory method for getting an instance of JSON numeric value
@@ -244,8 +252,12 @@ public class JsonNodeFactory
      * @see #JsonNodeFactory(boolean)
      */
     @Override
-    public NumericNode numberNode(BigDecimal v)
+    public ValueNode numberNode(BigDecimal v)
     {
+        if (v == null) {
+            return nullNode();
+        }
+
         /*
          * If the user wants the exact representation of this big decimal,
          * return the value directly

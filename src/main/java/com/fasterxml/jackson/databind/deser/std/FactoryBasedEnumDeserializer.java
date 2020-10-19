@@ -1,38 +1,28 @@
 package com.fasterxml.jackson.databind.deser.std;
 
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.databind.BeanProperty;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.JsonDeserializer;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.deser.ContextualDeserializer;
+
+import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
 import com.fasterxml.jackson.databind.deser.ValueInstantiator;
 import com.fasterxml.jackson.databind.deser.impl.PropertyBasedCreator;
 import com.fasterxml.jackson.databind.deser.impl.PropertyValueBuffer;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMethod;
 import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.type.LogicalType;
 import com.fasterxml.jackson.databind.util.ClassUtil;
 
 /**
  * Deserializer that uses a single-String static factory method
  * for locating Enum values by String id.
- * 
- * @since 2.8 (as stand-alone class; was static inner class of {@link EnumDeserializer}
  */
 class FactoryBasedEnumDeserializer
     extends StdDeserializer<Object>
-    implements ContextualDeserializer
 {
-    private static final long serialVersionUID = 1;
-
     // Marker type; null if String expected; otherwise numeric wrapper
     protected final JavaType _inputType;
     protected final boolean _hasArgs;
@@ -99,24 +89,55 @@ class FactoryBasedEnumDeserializer
         return this;
     }
 
+    @Override // since 2.9
+    public Boolean supportsUpdate(DeserializationConfig config) {
+        return Boolean.FALSE;
+    }
+
+    @Override // since 2.12
+    public LogicalType logicalType() {
+        return LogicalType.Enum;
+    }
+
+    // since 2.9.7: should have been the case earlier but
+    @Override
+    public boolean isCachable() { return true; }
+
+    @Override
+    public ValueInstantiator getValueInstantiator() { return _valueInstantiator; }
+
     @Override
     public Object deserialize(JsonParser p, DeserializationContext ctxt) throws IOException
     {
-        Object value = null;
+        Object value;
         if (_deser != null) {
             value = _deser.deserialize(p, ctxt);
         } else if (_hasArgs) {
-            JsonToken curr = p.getCurrentToken();
-            //There can be a JSON object passed for deserializing an Enum,
-            //the below case handles it.
-            if (curr == JsonToken.VALUE_STRING || curr == JsonToken.FIELD_NAME) {
-                value = p.getText();
-            } else if ((_creatorProps != null) && p.isExpectedStartObjectToken()) {
+            JsonToken curr = p.currentToken();
+
+            // 30-Mar-2020, tatu: For properties-based one, MUST get JSON Object (before
+            //   2.11, was just assuming match)
+            if (_creatorProps != null) {
+                if (!p.isExpectedStartObjectToken()) {
+                    final JavaType targetType = getValueType(ctxt);
+                    ctxt.reportInputMismatch(targetType,
+"Input mismatch reading Enum %s: properties-based `@JsonCreator` (%s) expects JSON Object (JsonToken.START_OBJECT), got JsonToken.%s",
+ClassUtil.getTypeDescription(targetType), _factory, p.currentToken());
+                }
                 if (_propCreator == null) {
-                    _propCreator = PropertyBasedCreator.construct(ctxt, _valueInstantiator, _creatorProps);
+                    _propCreator = PropertyBasedCreator.construct(ctxt, _valueInstantiator, _creatorProps,
+                            ctxt.isEnabled(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES));
                 }
                 p.nextToken();
                 return deserializeEnumUsingPropertyBased(p, ctxt, _propCreator);
+            }
+
+            // 30-Mar-2020, tatu: Single-arg delegating creators may go through
+            //    here; although not 100% sure why they do not take the first branch
+            if (curr == JsonToken.VALUE_STRING || curr == JsonToken.FIELD_NAME) {
+                value = p.getText();
+            } else if (curr == JsonToken.VALUE_NUMBER_INT) {
+                value = p.getNumberValue();
             } else {
                 value = p.getValueAsString();
             }
@@ -133,9 +154,9 @@ class FactoryBasedEnumDeserializer
             return _factory.callOnWith(_valueClass, value);
         } catch (Exception e) {
             Throwable t = ClassUtil.throwRootCauseIfIOE(e);
-            // [databind#1642]
-            if (ctxt.isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)
-                    && (t instanceof IllegalArgumentException)) {
+            // [databind#1642]:
+            if (ctxt.isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL) &&
+                    t instanceof IllegalArgumentException) {
                 return null;
             }
             return ctxt.handleInstantiationProblem(_valueClass, value, t);
@@ -156,9 +177,9 @@ class FactoryBasedEnumDeserializer
     {
         PropertyValueBuffer buffer = creator.startBuilding(p, ctxt, null);
     
-        JsonToken t = p.getCurrentToken();
+        JsonToken t = p.currentToken();
         for (; t == JsonToken.FIELD_NAME; t = p.nextToken()) {
-            String propName = p.getCurrentName();
+            String propName = p.currentName();
             p.nextToken(); // to point to value
     
             SettableBeanProperty creatorProp = creator.findCreatorProperty(propName);
@@ -176,43 +197,35 @@ class FactoryBasedEnumDeserializer
     // ************ Got the below methods from BeanDeserializer ********************//
 
     protected final Object _deserializeWithErrorWrapping(JsonParser p, DeserializationContext ctxt,
-    		SettableBeanProperty prop) throws IOException {
-    	try {
-    		return prop.deserialize(p, ctxt);
-    	} catch (Exception e) {
-    		wrapAndThrow(e, _valueClass.getClass(), prop.getName(), ctxt);
-    		// never gets here, unless caller declines to throw an exception
-    		return null;
-    	}
+            SettableBeanProperty prop) throws IOException
+    {
+        try {
+            return prop.deserialize(p, ctxt);
+        } catch (Exception e) {
+            return wrapAndThrow(e, handledType(), prop.getName(), ctxt);
+        }
     }
 
-    public void wrapAndThrow(Throwable t, Object bean, String fieldName, DeserializationContext ctxt)
-    		throws IOException
+    protected Object wrapAndThrow(Throwable t, Object bean, String fieldName, DeserializationContext ctxt)
+            throws IOException
     {
         throw JsonMappingException.wrapWithPath(throwOrReturnThrowable(t, ctxt), bean, fieldName);
     }
 
     private Throwable throwOrReturnThrowable(Throwable t, DeserializationContext ctxt) throws IOException
     {
-        while (t instanceof InvocationTargetException && t.getCause() != null) {
-            t = t.getCause();
-        }
+        t = ClassUtil.getRootCause(t);
         // Errors to be passed as is
-        if (t instanceof Error) {
-            throw (Error) t;
-        }
+        ClassUtil.throwIfError(t);
         boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
-    	    // Ditto for IOExceptions; except we may want to wrap JSON
-    	    // exceptions
-    	    if (t instanceof IOException) {
-    	        if (!wrap || !(t instanceof JsonProcessingException)) {
-    	            throw (IOException) t;
-    	        }
-    	    } else if (!wrap) {
-    	        if (t instanceof RuntimeException) {
-    	            throw (RuntimeException) t;
-    	        }
-    	    }
-    	    return t;
+        // Ditto for IOExceptions; except we may want to wrap JSON exceptions
+        if (t instanceof IOException) {
+            if (!wrap || !(t instanceof JsonProcessingException)) {
+                throw (IOException) t;
+            }
+        } else if (!wrap) {
+            ClassUtil.throwIfRTE(t);
+        }
+        return t;
     }
 }

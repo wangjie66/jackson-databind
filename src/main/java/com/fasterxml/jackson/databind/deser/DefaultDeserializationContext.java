@@ -1,5 +1,6 @@
 package com.fasterxml.jackson.databind.deser;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.Map.Entry;
 
@@ -7,8 +8,10 @@ import com.fasterxml.jackson.annotation.ObjectIdGenerator;
 import com.fasterxml.jackson.annotation.ObjectIdResolver;
 import com.fasterxml.jackson.annotation.ObjectIdGenerator.IdKey;
 
+import com.fasterxml.jackson.core.FormatSchema;
 import com.fasterxml.jackson.core.JsonParser;
-
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.TokenStreamFactory;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.cfg.HandlerInstantiator;
 import com.fasterxml.jackson.databind.deser.impl.ReadableObjectId;
@@ -21,16 +24,10 @@ import com.fasterxml.jackson.databind.util.ClassUtil;
  * extended API for {@link ObjectMapper} (and {@link ObjectReader})
  * to call, as well as implements certain parts that base class
  * has left abstract.
- * The remaining abstract methods ({@link #createInstance}, {@link #with})
- * are left so that custom implementations will properly implement them
- * to return intended subtype.
  */
 public abstract class DefaultDeserializationContext
     extends DeserializationContext
-    implements java.io.Serializable // since 2.1
 {
-    private static final long serialVersionUID = 1L;
-
     protected transient LinkedHashMap<ObjectIdGenerator.IdKey, ReadableObjectId> _objectIds;
 
     private List<ObjectIdResolver> _objectIdResolvers;
@@ -38,53 +35,39 @@ public abstract class DefaultDeserializationContext
     /**
      * Constructor that will pass specified deserializer factory and
      * cache: cache may be null (in which case default implementation
-     * will be used), factory can not be null
+     * will be used), factory cannot be null
      */
-    protected DefaultDeserializationContext(DeserializerFactory df, DeserializerCache cache) {
-        super(df, cache);
-    }
-    
-    protected DefaultDeserializationContext(DefaultDeserializationContext src,
-            DeserializationConfig config, JsonParser jp, InjectableValues values) {
-        super(src, config, jp, values);
+    protected DefaultDeserializationContext(TokenStreamFactory tsf,
+            DeserializerFactory deserializerFactory, DeserializerCache cache,
+            DeserializationConfig config, FormatSchema schema,
+            InjectableValues values) {
+        super(tsf, deserializerFactory, cache,
+                config, schema, values);
     }
 
-    protected DefaultDeserializationContext(DefaultDeserializationContext src,
-            DeserializerFactory factory) {
-        super(src, factory);
+    public DefaultDeserializationContext assignParser(JsonParser p) {
+        _parser = p;
+        _readCapabilities = p.getReadCapabilities();
+        return this;
     }
 
-    /**
-     * @since 2.4.4
-     */
-    protected DefaultDeserializationContext(DefaultDeserializationContext src) {
-        super(src);
-    }
-    
-    /**
-     * Method needed to ensure that {@link ObjectMapper#copy} will work
-     * properly; specifically, that caches are cleared, but settings
-     * will otherwise remain identical; and that no sharing of state
-     * occurs.
-     * 
-     * @since 2.4.4
-     */
-    public DefaultDeserializationContext copy() {
-        throw new IllegalStateException("DefaultDeserializationContext sub-class not overriding copy()");
+    public JsonParser assignAndReturnParser(JsonParser p) {
+        _parser = p;
+        _readCapabilities = p.getReadCapabilities();
+        return p;
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Abstract methods impls, Object Id
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
     public ReadableObjectId findObjectId(Object id, ObjectIdGenerator<?> gen, ObjectIdResolver resolverType)
     {
-        /* 02-Apr-2015, tatu: As per [databind#742] should allow 'null', similar to how
-         *   missing id already works.
-         */
+        // 02-Apr-2015, tatu: As per [databind#742] should allow 'null', similar to how
+        //   missing id already works.
         if (id == null) {
             return null;
         }
@@ -134,8 +117,6 @@ public abstract class DefaultDeserializationContext
      * 
      * @param key The key to associate with the new ReadableObjectId
      * @return New ReadableObjectId instance
-     *
-     * @since 2.7
      */
     protected ReadableObjectId createReadableObjectId(IdKey key) {
         return new ReadableObjectId(key);
@@ -182,8 +163,6 @@ public abstract class DefaultDeserializationContext
      *<p>
      * Default implementation simply calls {@link ReadableObjectId#tryToResolveUnresolved} and
      * returns whatever it returns.
-     *
-     * @since 2.6
      */
     protected boolean tryToResolveUnresolvedObjectId(ReadableObjectId roid)
     {
@@ -191,9 +170,9 @@ public abstract class DefaultDeserializationContext
     }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Abstract methods impls, other factory methods
-    /**********************************************************
+    /**********************************************************************
      */
     
     @SuppressWarnings("unchecked")
@@ -209,9 +188,8 @@ public abstract class DefaultDeserializationContext
         if (deserDef instanceof JsonDeserializer) {
             deser = (JsonDeserializer<?>) deserDef;
         } else {
-            /* Alas, there's no way to force return type of "either class
-             * X or Y" -- need to throw an exception after the fact
-             */
+            // Alas, there's no way to force return type of "either class
+            // X or Y" -- need to throw an exception after the fact
             if (!(deserDef instanceof Class)) {
                 throw new IllegalStateException("AnnotationIntrospector returned deserializer definition of type "+deserDef.getClass().getName()+"; expected type JsonDeserializer or Class<JsonDeserializer> instead");
             }
@@ -231,9 +209,7 @@ public abstract class DefaultDeserializationContext
             }
         }
         // First: need to resolve
-        if (deser instanceof ResolvableDeserializer) {
-            ((ResolvableDeserializer) deser).resolve(this);
-        }
+        deser.resolve(this);
         return (JsonDeserializer<Object>) deser;
     }
 
@@ -272,35 +248,74 @@ public abstract class DefaultDeserializationContext
             }
         }
         // First: need to resolve
-        if (deser instanceof ResolvableDeserializer) {
-            ((ResolvableDeserializer) deser).resolve(this);
-        }
+        deser.resolve(this);
         return deser;
     }
 
     /*
-    /**********************************************************
-    /* Extended API
-    /**********************************************************
+    /**********************************************************************
+    /* Extended API, read methods
+    /**********************************************************************
      */
 
-    /**
-     * Fluent factory method used for constructing a blueprint instance
-     * with different factory
-     */
-    public abstract DefaultDeserializationContext with(DeserializerFactory factory);
-    
-    /**
-     * Method called to create actual usable per-deserialization
-     * context instance.
-     */
-    public abstract DefaultDeserializationContext createInstance(
-            DeserializationConfig config, JsonParser jp, InjectableValues values);
-    
+    public Object readRootValue(JsonParser p, JavaType valueType,
+            JsonDeserializer<Object> deser, Object valueToUpdate)
+        throws IOException
+    {
+        if (_config.useRootWrapping()) {
+            return _unwrapAndDeserialize(p, valueType, deser, valueToUpdate);
+        }
+        if (valueToUpdate == null) {
+            return deser.deserialize(p, this);
+        }
+        return deser.deserialize(p, this, valueToUpdate);
+    }
+
+    protected Object _unwrapAndDeserialize(JsonParser p,
+            JavaType rootType, JsonDeserializer<Object> deser,
+            Object valueToUpdate)
+        throws IOException
+    {
+        PropertyName expRootName = findRootName(rootType);
+        // 12-Jun-2015, tatu: Should try to support namespaces etc but...
+        String expSimpleName = expRootName.getSimpleName();
+        if (p.currentToken() != JsonToken.START_OBJECT) {
+            reportWrongTokenException(rootType, JsonToken.START_OBJECT,
+                    "Current token not START_OBJECT (needed to unwrap root name '%s'), but %s",
+                    expSimpleName, p.currentToken());
+        }
+        if (p.nextToken() != JsonToken.FIELD_NAME) {
+            reportWrongTokenException(rootType, JsonToken.FIELD_NAME,
+                    "Current token not FIELD_NAME (to contain expected root name '%s'), but %s",
+                    expSimpleName, p.currentToken());
+        }
+        String actualName = p.currentName();
+        if (!expSimpleName.equals(actualName)) {
+            reportPropertyInputMismatch(rootType, actualName,
+                    "Root name '%s' does not match expected ('%s') for type %s",
+                    actualName, expSimpleName, rootType);
+        }
+        // ok, then move to value itself....
+        p.nextToken();
+        final Object result;
+        if (valueToUpdate == null) {
+            result = deser.deserialize(p, this);
+        } else {
+            result = deser.deserialize(p, this, valueToUpdate);
+        }
+        // and last, verify that we now get matching END_OBJECT
+        if (p.nextToken() != JsonToken.END_OBJECT) {
+            reportWrongTokenException(rootType, JsonToken.END_OBJECT,
+                    "Current token not END_OBJECT (to match wrapper object with root name '%s'), but %s",
+                    expSimpleName, p.currentToken());
+        }
+        return result;
+    }
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* And then the concrete implementation class
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -308,44 +323,12 @@ public abstract class DefaultDeserializationContext
      */
     public final static class Impl extends DefaultDeserializationContext
     {
-        private static final long serialVersionUID = 1L;
-
-        /**
-         * Default constructor for a blueprint object, which will use the standard
-         * {@link DeserializerCache}, given factory.
-         */
-        public Impl(DeserializerFactory df) {
-            super(df, null);
+        public Impl(TokenStreamFactory tsf,
+                DeserializerFactory deserializerFactory, DeserializerCache cache,
+                DeserializationConfig config, FormatSchema schema,
+                InjectableValues values) {
+            super(tsf, deserializerFactory, cache,
+                    config, schema, values);
         }
-
-        protected Impl(Impl src,
-                DeserializationConfig config, JsonParser jp, InjectableValues values) {
-            super(src, config, jp, values);
-        }
-
-        protected Impl(Impl src) { super(src); }
-        
-        protected Impl(Impl src, DeserializerFactory factory) {
-            super(src, factory);
-        }
-
-        @Override
-        public DefaultDeserializationContext copy() {
-            if (getClass() != Impl.class) {
-                return super.copy();
-            }
-           return new Impl(this);
-        }
-        
-        @Override
-        public DefaultDeserializationContext createInstance(DeserializationConfig config,
-                JsonParser jp, InjectableValues values) {
-            return new Impl(this, config, jp, values);
-        }
-
-        @Override
-        public DefaultDeserializationContext with(DeserializerFactory factory) {
-            return new Impl(this, factory);
-        }        
     }
 }

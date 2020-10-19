@@ -28,22 +28,41 @@ public class ResolvedRecursiveType extends TypeBase
    
     @Override
     public JavaType getSuperClass() {
-    	if (_referencedType != null) {
-    		return _referencedType.getSuperClass();
-    	}
-    	return super.getSuperClass();
+        if (_referencedType != null) {
+            return _referencedType.getSuperClass();
+        }
+        return super.getSuperClass();
     }
 
     public JavaType getSelfReferencedType() { return _referencedType; }
 
+    // 23-Jul-2019, tatu: [databind#2331] Need to also delegate this...
+    @Override
+    public TypeBindings getBindings() {
+        if (_referencedType != null) { // `null` before resolution [databind#2395]
+            return _referencedType.getBindings();
+        }
+        return super.getBindings();
+    }
+
     @Override
     public StringBuilder getGenericSignature(StringBuilder sb) {
-        return _referencedType.getGenericSignature(sb);
+        // 30-Oct-2019, tatu: Alas, need to break recursion, otherwise we'll
+        //    end up in StackOverflowError... two choices; '?' for "not known",
+        //    or erased signature.
+        if (_referencedType != null) {
+//            return _referencedType.getGenericSignature(sb);
+            return _referencedType.getErasedSignature(sb);
+        }
+        return sb.append("?");
     }
 
     @Override
     public StringBuilder getErasedSignature(StringBuilder sb) {
-        return _referencedType.getErasedSignature(sb);
+        if (_referencedType != null) {
+            return _referencedType.getErasedSignature(sb);
+        }
+        return sb;
     }
 
     @Override
@@ -73,12 +92,6 @@ public class ResolvedRecursiveType extends TypeBase
 
     @Override
     public JavaType withStaticTyping() {
-        return this;
-    }
-
-    @Deprecated // since 2.7
-    @Override
-    protected JavaType _narrow(Class<?> subclass) {
         return this;
     }
 
@@ -112,7 +125,7 @@ public class ResolvedRecursiveType extends TypeBase
         if (o == this) return true;
         if (o == null) return false;
         if (o.getClass() == getClass()) {
-            // 16-Jun-2017, tatu: as per [databind#1658], can not do recursive call since
+            // 16-Jun-2017, tatu: as per [databind#1658], cannot do recursive call since
             //    there is likely to be a cycle...
 
             // but... true or false?

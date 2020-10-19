@@ -5,18 +5,20 @@ import java.util.Locale;
 import java.util.TimeZone;
 
 import com.fasterxml.jackson.annotation.*;
+
 import com.fasterxml.jackson.core.Base64Variant;
 import com.fasterxml.jackson.core.SerializableString;
 import com.fasterxml.jackson.core.io.SerializedString;
 import com.fasterxml.jackson.core.type.TypeReference;
+
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.introspect.Annotated;
-import com.fasterxml.jackson.databind.introspect.AnnotatedClass;
-import com.fasterxml.jackson.databind.introspect.ClassIntrospector;
-import com.fasterxml.jackson.databind.introspect.VisibilityChecker;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
 import com.fasterxml.jackson.databind.jsontype.SubtypeResolver;
 import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
 import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
+import com.fasterxml.jackson.databind.jsontype.TypeResolverProvider;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.type.TypeFactory;
 import com.fasterxml.jackson.databind.util.ClassUtil;
 
@@ -33,19 +35,13 @@ import com.fasterxml.jackson.databind.util.ClassUtil;
  * that is shared between different types of instances.
  */
 public abstract class MapperConfig<T extends MapperConfig<T>>
-    implements ClassIntrospector.MixInResolver,
+    implements MixInResolver,
         java.io.Serializable
 {
-    private static final long serialVersionUID = 1L; // since 2.5
+    private static final long serialVersionUID = 3L; // since 3.0
 
-    /**
-     * @since 2.7
-     */
     protected final static JsonInclude.Value EMPTY_INCLUDE = JsonInclude.Value.empty();
 
-    /**
-     * @since 2.7
-     */
     protected final static JsonFormat.Value EMPTY_FORMAT = JsonFormat.Value.empty();
 
     /**
@@ -57,22 +53,16 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
      * Immutable container object for simple configuration settings.
      */
     protected final BaseSettings _base;
-    
+
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle: constructors
-    /**********************************************************
+    /**********************************************************************
      */
 
     protected MapperConfig(BaseSettings base, int mapperFeatures)
     {
         _base = base;
-        _mapperFeatures = mapperFeatures;
-    }
-
-    protected MapperConfig(MapperConfig<T> src, int mapperFeatures)
-    {
-        _base = src._base;
         _mapperFeatures = mapperFeatures;
     }
 
@@ -87,49 +77,11 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
         _base = src._base;
         _mapperFeatures = src._mapperFeatures;
     }
-    
-    /**
-     * Method that calculates bit set (flags) of all features that
-     * are enabled by default.
-     */
-    public static <F extends Enum<F> & ConfigFeature> int collectFeatureDefaults(Class<F> enumClass)
-    {
-        int flags = 0;
-        for (F value : enumClass.getEnumConstants()) {
-            if (value.enabledByDefault()) {
-                flags |= value.getMask();
-            }
-        }
-        return flags;
-    }
 
     /*
-    /**********************************************************
-    /* Life-cycle: factory methods
-    /**********************************************************
-     */
-    
-    /**
-     * Method for constructing and returning a new instance with specified
-     * mapper features enabled.
-     */
-    public abstract T with(MapperFeature... features);
-
-    /**
-     * Method for constructing and returning a new instance with specified
-     * mapper features disabled.
-     */
-    public abstract T without(MapperFeature... features);
-
-    /**
-     * @since 2.3
-     */
-    public abstract T with(MapperFeature feature, boolean state);
-    
-    /*
-    /**********************************************************
+    /**********************************************************************
     /* Configuration: simple features
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -143,8 +95,6 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
     /**
      * "Bulk" access method for checking that all features specified by
      * mask are enabled.
-     * 
-     * @since 2.3
      */
     public final boolean hasMapperFeatures(int featureMask) {
         return (_mapperFeatures & featureMask) == featureMask;
@@ -191,9 +141,9 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
     public abstract boolean useRootWrapping();
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Configuration: factory methods
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**
@@ -204,26 +154,24 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
      * @param src Text to represent
      * 
      * @return Optimized text object constructed
-     * 
-     * @since 2.4
      */
     public SerializableString compileString(String src) {
-        /* 20-Jan-2014, tatu: For now we will just construct it directly, but
-         *    for 2.4 need to allow overriding to support non-standard extensions
-         *    to be used by extensions like Afterburner.
-         */
+        // 20-Jan-2014, tatu: For now we will just construct it directly but in distant
+        //   future might want to allow overriding somehow?
         return new SerializedString(src);
     }
     
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Configuration: introspectors, mix-ins
-    /**********************************************************
+    /**********************************************************************
      */
-    
-    public ClassIntrospector getClassIntrospector() {
-        return _base.getClassIntrospector();
-    }
+
+    /**
+     * Accessor for getting a new {@link ClassIntrospector} instance initialized
+     * for per-call usage (with possible local caching)
+     */
+    public abstract ClassIntrospector classIntrospectorInstance();
 
     /**
      * Method for getting {@link AnnotationIntrospector} configured
@@ -232,8 +180,227 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
      * Non-final since it is actually overridden by sub-classes (for now?)
      */
     public AnnotationIntrospector getAnnotationIntrospector() {
-        return _base.getAnnotationIntrospector();
+        if (isEnabled(MapperFeature.USE_ANNOTATIONS)) {
+            return _base.getAnnotationIntrospector();
+        }
+        return NopAnnotationIntrospector.instance;
     }
+
+    public final PropertyNamingStrategy getPropertyNamingStrategy() {
+        return _base.getPropertyNamingStrategy();
+    }
+
+    public final HandlerInstantiator getHandlerInstantiator() {
+        return _base.getHandlerInstantiator();
+    }
+
+    /*
+    /**********************************************************************
+    /* Configuration: type and subtype handling
+    /**********************************************************************
+     */
+
+    /**
+     * Method called to locate a type info handler for types that do not have
+     * one explicitly declared via annotations (or other configuration).
+     * If such a default handler is configured, it is returned; otherwise
+     * null is returned.
+     */
+    public final TypeResolverBuilder<?> getDefaultTyper(JavaType baseType) {
+        return _base.getDefaultTyper();
+    }
+
+    /**
+     * @since 3.0
+     */
+    public abstract TypeResolverProvider getTypeResolverProvider();
+
+    public abstract SubtypeResolver getSubtypeResolver();
+    public abstract TypeFactory getTypeFactory();
+
+    public final PolymorphicTypeValidator getPolymorphicTypeValidator() {
+        return _base.getPolymorphicTypeValidator();
+    }
+
+        /**
+     * Helper method that will construct {@link JavaType} for given
+     * raw class.
+     * This is a simple short-cut for:
+     *<pre>
+     *    getTypeFactory().constructType(cls);
+     *</pre>
+     */
+    public abstract JavaType constructType(Class<?> cls);
+
+    /**
+     * Helper method that will construct {@link JavaType} for given
+     * type reference
+     * This is a simple short-cut for:
+     *<pre>
+     *    getTypeFactory().constructType(valueTypeRef);
+     *</pre>
+     */
+    public abstract JavaType constructType(TypeReference<?> valueTypeRef);
+
+    /*
+    /**********************************************************************
+    /* Configuration: introspection support
+    /**********************************************************************
+     */
+
+    /**
+     * Accessor for getting bean description that only contains class
+     * annotations: useful if no getter/setter/creator information is needed.
+     */
+//    public AnnotatedClass introspectClassAnnotations(Class<?> cls) {
+//      return getClassIntrospector().introspectClassAnnotations(this,
+//              constructType(cls), this);
+//    }
+
+    /**
+     * Accessor for getting bean description that only contains class
+     * annotations: useful if no getter/setter/creator information is needed.
+     */
+//    public AnnotatedClass introspectClassAnnotations(JavaType type) {
+//        return getClassIntrospector().introspectClassAnnotations(this, type, this);
+//    }
+
+    /**
+     * Accessor for getting bean description that only contains immediate class
+     * annotations: ones from the class, and its direct mix-in, if any, but
+     * not from super types.
+     */
+//    public final AnnotatedClass introspectDirectClassAnnotations(JavaType type) {
+//        return getClassIntrospector().introspectDirectClassAnnotations(this, type, this);
+//    }
+
+    /*
+    /**********************************************************************
+    /* Configuration: default settings with per-type overrides
+    /**********************************************************************
+     */
+
+    /**
+     * Accessor for finding {@link ConfigOverride} to use for
+     * properties of given type, if any exist; or return `null` if not.
+     *<p>
+     * Note that only directly associated override
+     * is found; no type hierarchy traversal is performed.
+     * 
+     * @return Override object to use for the type, if defined; null if none.
+     */
+    public abstract ConfigOverride findConfigOverride(Class<?> type);
+
+    /**
+     * Accessor for finding {@link ConfigOverride} to use for
+     * properties of given type, if any exist; or if none, return an immutable
+     * "empty" instance with no overrides.
+     *<p>
+     * Note that only directly associated override
+     * is found; no type hierarchy traversal is performed.
+     * 
+     * @return Override object to use for the type, never null (but may be empty)
+     */
+    public abstract ConfigOverride getConfigOverride(Class<?> type);
+
+    /**
+     * Accessor for default property inclusion to use for serialization,
+     * used unless overridden by per-type or per-property overrides.
+     */
+    public abstract JsonInclude.Value getDefaultPropertyInclusion();
+
+    /**
+     * Accessor for default property inclusion to use for serialization,
+     * considering possible per-type override for given base type.<br>
+     * NOTE: if no override found, defaults to value returned by
+     * {@link #getDefaultPropertyInclusion()}.
+     */
+    public abstract JsonInclude.Value getDefaultPropertyInclusion(Class<?> baseType);
+
+    /**
+     * Accessor for default property inclusion to use for serialization,
+     * considering possible per-type override for given base type; but
+     * if none found, returning given <code>defaultIncl</code>
+     *
+     * @param defaultIncl Inclusion setting to return if no overrides found.
+     */
+    public JsonInclude.Value getDefaultPropertyInclusion(Class<?> baseType,
+            JsonInclude.Value defaultIncl)
+    {
+        JsonInclude.Value v = getConfigOverride(baseType).getInclude();
+        if (v != null) {
+            return v;
+        }
+        return defaultIncl;
+    }
+
+    /**
+     * Accessor for default property inclusion to use for serialization,
+     * considering possible per-type override for given base type and
+     * possible per-type override for given property type.<br>
+     * NOTE: if no override found, defaults to value returned by
+     * {@link #getDefaultPropertyInclusion()}.
+     *
+     * @param baseType Type of the instance containing the targeted property.
+     * @param propertyType Type of the property to look up inclusion setting for.
+     */
+    public abstract JsonInclude.Value getDefaultInclusion(Class<?> baseType,
+            Class<?> propertyType);
+
+    /**
+     * Accessor for default property inclusion to use for serialization,
+     * considering possible per-type override for given base type and
+     * possible per-type override for given property type; but
+     * if none found, returning given <code>defaultIncl</code>
+     *
+     * @param baseType Type of the instance containing the targeted property.
+     * @param propertyType Type of the property to look up inclusion setting for.
+     * @param defaultIncl Inclusion setting to return if no overrides found.
+     */
+    public JsonInclude.Value getDefaultInclusion(Class<?> baseType,
+            Class<?> propertyType, JsonInclude.Value defaultIncl)
+    {
+        JsonInclude.Value baseOverride = getConfigOverride(baseType).getInclude();
+        JsonInclude.Value propOverride = getConfigOverride(propertyType).getIncludeAsProperty();
+
+        JsonInclude.Value result = JsonInclude.Value.mergeAll(defaultIncl, baseOverride, propOverride);
+        return result;
+    }
+
+    /**
+     * Accessor for default format settings to use for serialization (and, to a degree
+     * deserialization), considering baseline settings and per-type defaults
+     * for given base type (if any).
+     *
+     * @return (non-null) Format settings to use, possibly `JsonFormat.Value.empty()`
+     */
+    public abstract JsonFormat.Value getDefaultPropertyFormat(Class<?> baseType);
+
+    /**
+     * Accessor for default property ignorals to use, if any, for given base type,
+     * based on config overrides settings (see {@link #findConfigOverride(Class)}).
+     */
+    public abstract JsonIgnoreProperties.Value getDefaultPropertyIgnorals(Class<?> baseType);
+
+    /**
+     * Helper method that may be called to see if there are property ignoral
+     * definitions from annotations (via {@link AnnotatedClass}) or through
+     * "config overrides". If both exist, config overrides have precedence
+     * over class annotations.
+     */
+    public abstract JsonIgnoreProperties.Value getDefaultPropertyIgnorals(Class<?> baseType,
+            AnnotatedClass actualClass);
+
+    /**
+     * Helper method that may be called to see if there are property inclusion
+     * definitions from annotations (via {@link AnnotatedClass}).
+     *
+     * TODO: config override.
+     *
+     * @since 2.12
+     */
+    public abstract JsonIncludeProperties.Value getDefaultPropertyInclusions(Class<?> baseType,
+            AnnotatedClass actualClass);
 
     /**
      * Accessor for object used for determining whether specific property elements
@@ -244,182 +411,51 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
      * can further override active checker used (using
      * {@link JsonAutoDetect} annotation)
      */
-    public VisibilityChecker<?> getDefaultVisibilityChecker() {
-        return _base.getVisibilityChecker();
-    }
-    
-    public final PropertyNamingStrategy getPropertyNamingStrategy() {
-        return _base.getPropertyNamingStrategy();
-    }
-
-    public final HandlerInstantiator getHandlerInstantiator() {
-        return _base.getHandlerInstantiator();
-    }
-    
-    /*
-    /**********************************************************
-    /* Configuration: type and subtype handling
-    /**********************************************************
-     */
+    public abstract VisibilityChecker getDefaultVisibilityChecker();
 
     /**
-     * Method called to locate a type info handler for types that do not have
-     * one explicitly declared via annotations (or other configuration).
-     * If such default handler is configured, it is returned; otherwise
-     * null is returned.
+     * Accessor for object used for determining whether specific property elements
+     * (method, constructors, fields) can be auto-detected based on
+     * their visibility (access modifiers). This is based on global defaults
+     * (as would be returned by {@link #getDefaultVisibilityChecker()}, but
+     * then modified by possible class annotation (see {@link JsonAutoDetect})
+     * and/or per-type config override (see {@link ConfigOverride#getVisibility()}).
      */
-    public final TypeResolverBuilder<?> getDefaultTyper(JavaType baseType) {
-        return _base.getTypeResolverBuilder();
-    }
-    
-    public abstract SubtypeResolver getSubtypeResolver();
-
-    public final TypeFactory getTypeFactory() {
-        return _base.getTypeFactory();
-    }
-
-    /**
-     * Helper method that will construct {@link JavaType} for given
-     * raw class.
-     * This is a simple short-cut for:
-     *<pre>
-     *    getTypeFactory().constructType(cls);
-     *</pre>
-     */
-    public final JavaType constructType(Class<?> cls) {
-        return getTypeFactory().constructType(cls);
-    }
-
-    /**
-     * Helper method that will construct {@link JavaType} for given
-     * type reference
-     * This is a simple short-cut for:
-     *<pre>
-     *    getTypeFactory().constructType(valueTypeRef);
-     *</pre>
-     */
-    public final JavaType constructType(TypeReference<?> valueTypeRef) {
-        return getTypeFactory().constructType(valueTypeRef.getType());
-    }
-
-    public JavaType constructSpecializedType(JavaType baseType, Class<?> subclass) {
-        return getTypeFactory().constructSpecializedType(baseType, subclass);
-    }
-
-    /*
-    /**********************************************************
-    /* Configuration: introspection support
-    /**********************************************************
-     */
-
-    /**
-     * Accessor for getting bean description that only contains class
-     * annotations: useful if no getter/setter/creator information is needed.
-     */
-    public BeanDescription introspectClassAnnotations(Class<?> cls) {
-        return introspectClassAnnotations(constructType(cls));
-    }
-    
-    /**
-     * Accessor for getting bean description that only contains class
-     * annotations: useful if no getter/setter/creator information is needed.
-     */
-    public abstract BeanDescription introspectClassAnnotations(JavaType type);
-
-    /**
-     * Accessor for getting bean description that only contains immediate class
-     * annotations: ones from the class, and its direct mix-in, if any, but
-     * not from super types.
-     */
-    public BeanDescription introspectDirectClassAnnotations(Class<?> cls) {
-        return introspectDirectClassAnnotations(constructType(cls));
-    }
-    /**
-     * Accessor for getting bean description that only contains immediate class
-     * annotations: ones from the class, and its direct mix-in, if any, but
-     * not from super types.
-     */
-    public abstract BeanDescription introspectDirectClassAnnotations(JavaType type);
-
-    /*
-    /**********************************************************
-    /* Configuration: default settings with per-type overrides
-    /**********************************************************
-     */
-
-    /**
-     * Accessor for default property inclusion to use for serialization,
-     * used unless overridden by per-type or per-property overrides.
-     *
-     * @since 2.7
-     */
-    public abstract JsonInclude.Value getDefaultPropertyInclusion();
-
-    /**
-     * Accessor for default property inclusion to use for serialization,
-     * considering possible per-type override for given base type.<br>
-     * NOTE: if no override found, defaults to value returned by
-     * {@link #getDefaultPropertyInclusion()}.
-     *
-     * @since 2.7
-     */
-    public abstract JsonInclude.Value getDefaultPropertyInclusion(Class<?> baseType);
-
-    /**
-     * Accessor for default property inclusion to use for serialization,
-     * considering possible per-type override for given base type; but
-     * if none found, returning given <code>defaultIncl</code>
-     *
-     * @param defaultIncl Inclusion setting to return if no overrides found.
-     * 
-     * @since 2.8.2
-     */
-    public abstract JsonInclude.Value getDefaultPropertyInclusion(Class<?> baseType,
-            JsonInclude.Value defaultIncl);
-
-    /**
-     * Accessor for default format settings to use for serialization (and, to a degree
-     * deserialization), considering baseline settings and per-type defaults
-     * for given base type (if any).
-     *
-     * @since 2.7
-     */
-    public abstract JsonFormat.Value getDefaultPropertyFormat(Class<?> baseType);
-
-    /**
-     * Accessor for default property ignorals to use, if any, for given base type,
-     * based on config overrides settings (see {@link #findConfigOverride(Class)}).
-     *
-     * @since 2.8
-     */
-    public abstract JsonIgnoreProperties.Value getDefaultPropertyIgnorals(Class<?> baseType);
-
-    /**
-     * Helper method that may be called to see if there are property ignoral
-     * definitions from annotations (via {@link AnnotatedClass}) or through
-     * "config overrides". If both exist, config overrides have precedence
-     * over class annotations.
-     *
-     * @since 2.8
-     */
-    public abstract JsonIgnoreProperties.Value getDefaultPropertyIgnorals(Class<?> baseType,
+    public abstract VisibilityChecker getDefaultVisibilityChecker(Class<?> baseType,
             AnnotatedClass actualClass);
 
     /**
-     * Accessor for finding possible {@link ConfigOverride} to use for
-     * properties of given type. Note that only directly associate override
-     * is found; no type hierarchy traversal is performed.
+     * Accessor for the baseline setter info used as the global baseline,
+     * not considering possible per-type overrides.
      *
-     * @since 2.8
-     * 
-     * @return Override object if there is an override for specified type; `null` if not
+     * @since 3.0
+     *
+     * @return Global base settings; never null
      */
-    public abstract ConfigOverride findConfigOverride(Class<?> type);
+    public abstract JsonSetter.Value getDefaultNullHandling();
+
+    /**
+     * Accessor for the baseline merge info used as the global baseline,
+     * not considering possible per-type overrides.
+     *
+     * @return Global base settings, if any; `null` if none.
+     */
+    public abstract Boolean getDefaultMergeable();
+
+    /**
+     * Accessor for the baseline merge info used for given type, including global
+     * defaults if no type-specific overrides defined.
+     *
+     * @return Type-specific settings (if any); global defaults (same as
+     *    {@link #getDefaultMergeable()}) otherwise, if any defined; or `null`
+     *    if neither defined
+     */
+    public abstract Boolean getDefaultMergeable(Class<?> baseType);
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Configuration: other
-    /**********************************************************
+    /**********************************************************************
      */
     
     /**
@@ -470,29 +506,24 @@ public abstract class MapperConfig<T extends MapperConfig<T>>
         return _base.getBase64Variant();
     }
 
+    public final JsonNodeFactory getNodeFactory() {
+        return _base.getNodeFactory();
+    }
     /**
      * Method for accessing per-instance shared (baseline/default)
      * attribute values; these are used as the basis for per-call
      * attributes.
-     * 
-     * @since 2.3
      */
     public abstract ContextAttributes getAttributes();
 
-    /**
-     * @since 2.6
-     */
-    public abstract PropertyName findRootName(JavaType rootType);
+    public abstract PropertyName findRootName(DatabindContext ctxt, JavaType rootType);
 
-    /**
-     * @since 2.6
-     */
-    public abstract PropertyName findRootName(Class<?> rawRootType);
+    public abstract PropertyName findRootName(DatabindContext ctxt, Class<?> rawRootType);
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Methods for instantiating handlers
-    /**********************************************************
+    /**********************************************************************
      */
 
     /**

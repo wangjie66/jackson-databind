@@ -11,27 +11,16 @@ import com.fasterxml.jackson.databind.util.ClassUtil;
  */
 public final class AnnotatedField
     extends AnnotatedMember
-    implements java.io.Serializable
 {
-    private static final long serialVersionUID = 1L;
-
     /**
      * Actual {@link Field} used for access.
-     *<p>
-     * Transient since it can not be persisted directly using
-     * JDK serialization
      */
-    protected final transient Field _field;
-
-    /**
-     * Temporary field required for JDK serialization support
-     */
-    protected Serialization _serialization;
+    protected final Field _field;
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Life-cycle
-    /**********************************************************
+    /**********************************************************************
      */
 
     public AnnotatedField(TypeResolutionContext contextClass, Field field, AnnotationMap annMap)
@@ -45,20 +34,10 @@ public final class AnnotatedField
         return new AnnotatedField(_typeContext, _field, ann);
     }
 
-    /**
-     * Method used for JDK serialization support
-     */
-    protected AnnotatedField(Serialization ser)
-    {
-        super(null, null);
-        _field = null;
-        _serialization = ser;
-    }
-    
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Annotated impl
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -75,21 +54,15 @@ public final class AnnotatedField
         return _field.getType();
     }
 
-    @Deprecated
-    @Override
-    public Type getGenericType() {
-        return _field.getGenericType();
-    }
-    
     @Override
     public JavaType getType() {
         return _typeContext.resolveType(_field.getGenericType());
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* AnnotatedMember impl
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
@@ -119,16 +92,12 @@ public final class AnnotatedField
                     +getFullName()+": "+e.getMessage(), e);
         }
     }
-    
-    /*
-    /**********************************************************
-    /* Extended API, generic
-    /**********************************************************
-     */
 
-    public String getFullName() {
-        return getDeclaringClass().getName() + "#" + getName();
-    }
+    /*
+    /**********************************************************************
+    /* Extended API, generic
+    /**********************************************************************
+     */
 
     public int getAnnotationCount() { return _annotations.size(); }
 
@@ -145,57 +114,13 @@ public final class AnnotatedField
     @Override
     public boolean equals(Object o) {
         if (o == this) return true;
-        if (o == null || o.getClass() != getClass()) return false;
-        return ((AnnotatedField) o)._field == _field;
+        return ClassUtil.hasClass(o, getClass())
+                && (((AnnotatedField) o)._field == _field);
     }
 
     @Override
     public String toString() {
         return "[field "+getFullName()+"]";
-    }
-
-    /*
-    /**********************************************************
-    /* JDK serialization handling
-    /**********************************************************
-     */
-
-    Object writeReplace() {
-        return new AnnotatedField(new Serialization(_field));
-    }
-
-    Object readResolve() {
-        Class<?> clazz = _serialization.clazz;
-        try {
-            Field f = clazz.getDeclaredField(_serialization.name);
-            // 06-Oct-2012, tatu: Has "lost" its security override, may need to force back
-            if (!f.isAccessible()) {
-                ClassUtil.checkAndFixAccess(f, false);
-            }
-            return new AnnotatedField(null, f, null);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Could not find method '"+_serialization.name
-                        +"' from Class '"+clazz.getName());
-        }
-    }
-    
-    /**
-     * Helper class that is used as the workaround to persist
-     * Field references. It basically just stores declaring class
-     * and field name.
-     */
-    private final static class Serialization
-        implements java.io.Serializable
-    {
-        private static final long serialVersionUID = 1L;
-        protected Class<?> clazz;
-        protected String name;
-
-        public Serialization(Field f) {
-            clazz = f.getDeclaringClass();
-            name = f.getName();
-            
-        }
     }
 }
 

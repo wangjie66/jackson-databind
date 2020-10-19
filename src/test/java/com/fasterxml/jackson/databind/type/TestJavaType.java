@@ -25,6 +25,22 @@ public class TestJavaType
         private MyEnum2(int value) { }
     }
 
+    static enum MyEnumSub {
+        A(1) {
+            @Override public String toString() { 
+                return "a";
+            }
+        },
+        B(2) {
+            @Override public String toString() { 
+                return "b";
+            }
+        }
+        ;
+
+        private MyEnumSub(int value) { }
+    }
+    
     // [databind#728]
     static class Issue728 {
         public <C extends CharSequence> C method(C input) { return null; }
@@ -72,6 +88,7 @@ public class TestJavaType
         JavaType baseType = tf.constructType(BaseType.class);
         assertSame(BaseType.class, baseType.getRawClass());
         assertTrue(baseType.hasRawClass(BaseType.class));
+        assertFalse(baseType.isTypeOrSubTypeOf(SubType.class));
 
         assertFalse(baseType.isArrayType());
         assertFalse(baseType.isContainerType());
@@ -84,6 +101,9 @@ public class TestJavaType
         assertNull(baseType.getContentType());
         assertNull(baseType.getKeyType());
         assertNull(baseType.getValueHandler());
+
+        assertEquals("Lcom/fasterxml/jackson/databind/type/TestJavaType$BaseType;", baseType.getGenericSignature());
+        assertEquals("Lcom/fasterxml/jackson/databind/type/TestJavaType$BaseType;", baseType.getErasedSignature());
     }
 
     public void testArrayType()
@@ -101,7 +121,8 @@ public class TestJavaType
 
         assertTrue(arrayT.equals(arrayT));
         assertFalse(arrayT.equals(null));
-        assertFalse(arrayT.equals("xyz"));
+        final Object bogus = "xyz";
+        assertFalse(arrayT.equals(bogus));
 
         assertTrue(arrayT.equals(ArrayType.construct(tf.constructType(String.class), null)));
         assertFalse(arrayT.equals(ArrayType.construct(tf.constructType(Integer.class), null)));
@@ -119,27 +140,59 @@ public class TestJavaType
         assertNotNull(mapT.getContentType());
         assertNotNull(mapT.getKeyType());
 
+        assertEquals("Ljava/util/HashMap<Ljava/lang/Object;Ljava/lang/Object;>;", mapT.getGenericSignature());
+        assertEquals("Ljava/util/HashMap;", mapT.getErasedSignature());
+        
         assertTrue(mapT.equals(mapT));
         assertFalse(mapT.equals(null));
-        assertFalse(mapT.equals("xyz"));
+        Object bogus = "xyz";
+        assertFalse(mapT.equals(bogus));
     }
-    
+
     public void testEnumType()
     {
         TypeFactory tf = TypeFactory.defaultInstance();
-        assertTrue(tf.constructType(MyEnum.class).isEnumType());
+        JavaType enumT = tf.constructType(MyEnum.class);
+        // JDK actually works fine with "basic" Enum types...
+        assertTrue(enumT.getRawClass().isEnum());
+        assertTrue(enumT.isEnumType());
+        assertTrue(enumT.isEnumImplType());
+
+        assertFalse(enumT.hasHandlers());
+        assertTrue(enumT.isTypeOrSubTypeOf(MyEnum.class));
+        assertTrue(enumT.isTypeOrSubTypeOf(Object.class));
+        assertNull(enumT.containedType(3));
+        assertTrue(enumT.containedTypeOrUnknown(3).isJavaLangObject());
+
+        assertEquals("Lcom/fasterxml/jackson/databind/type/TestJavaType$MyEnum;", enumT.getGenericSignature());
+        assertEquals("Lcom/fasterxml/jackson/databind/type/TestJavaType$MyEnum;", enumT.getErasedSignature());
+
         assertTrue(tf.constructType(MyEnum2.class).isEnumType());
         assertTrue(tf.constructType(MyEnum.A.getClass()).isEnumType());
         assertTrue(tf.constructType(MyEnum2.A.getClass()).isEnumType());
+
+        // [databind#2480]
+        assertFalse(tf.constructType(Enum.class).isEnumImplType());
+        JavaType enumSubT = tf.constructType(MyEnumSub.B.getClass());
+        assertTrue(enumSubT.isEnumType());
+        assertTrue(enumSubT.isEnumImplType());
+
+        // and this is kind of odd twist by JDK: one might except this to return true,
+        // but no, sub-classes (when Enum values have overrides, and require sub-class)
+        // are NOT considered enums for whatever reason
+        assertFalse(enumSubT.getRawClass().isEnum());
     }
 
     public void testClassKey()
     {
         ClassKey key = new ClassKey(String.class);
-        assertEquals(0, key.compareTo(key));
+        ClassKey keyToo = key;
+        int selfComparisonResult = key.compareTo(keyToo);
+        assertEquals(0, selfComparisonResult);
         assertTrue(key.equals(key));
         assertFalse(key.equals(null));
-        assertFalse(key.equals("foo"));
+        Object bogus = "foo";
+        assertFalse(key.equals(bogus));
         assertFalse(key.equals(new ClassKey(Integer.class)));
         assertEquals(String.class.getName(), key.toString());
     }
@@ -164,7 +217,8 @@ public class TestJavaType
         m = Generic1194.class.getMethod("getList");
         t  = tf.constructType(m.getGenericReturnType());
         assertEquals("Ljava/util/List<Ljava/lang/String;>;", t.getGenericSignature());
-
+        assertEquals("Ljava/util/List;", t.getErasedSignature());
+        
         m = Generic1194.class.getMethod("getMap");
         t  = tf.constructType(m.getGenericReturnType());
         assertEquals("Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;",
@@ -181,6 +235,9 @@ public class TestJavaType
         JavaType t  = tf.constructType(AtomicStringReference.class);
         assertTrue(t.isReferenceType());
         assertTrue(t.hasContentType());
+        JavaType ct = t.getContentType();
+        assertEquals(String.class, ct.getRawClass());
+        assertSame(ct, t.containedType(0));
         ReferenceType rt = (ReferenceType) t;
         assertFalse(rt.isAnchorType());
         assertEquals(AtomicReference.class, rt.getAnchorType().getRawClass());
@@ -196,5 +253,25 @@ public class TestJavaType
         JavaType sub = tf.constructSpecializedType(base, AtomicReference.class);
         assertEquals(AtomicReference.class, sub.getRawClass());
         assertTrue(sub.isReferenceType());
+    }
+
+    // for [databind#2091]
+    public void testConstructReferenceType() throws Exception
+    {
+        TypeFactory tf = TypeFactory.defaultInstance();
+        // do AtomicReference<Long>
+        final JavaType refdType = tf.constructType(Long.class);
+        JavaType t  = tf.constructReferenceType(AtomicReference.class, refdType);
+        assertTrue(t.isReferenceType());
+        assertTrue(t.hasContentType());
+        assertEquals(Long.class, t.getContentType().getRawClass());
+
+        // 26-Mar-2020, tatu: [databind#2019] made this work
+        assertEquals(1, t.containedTypeCount());
+        TypeBindings bindings = t.getBindings();
+        assertEquals(1, bindings.size());
+        assertEquals(refdType, bindings.getBoundType(0));
+        // Should we even verify this or not?
+        assertEquals("V", bindings.getBoundName(0));
     }
 }

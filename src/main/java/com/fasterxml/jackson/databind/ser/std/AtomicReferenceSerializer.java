@@ -2,8 +2,6 @@ package com.fasterxml.jackson.databind.ser.std;
 
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
 import com.fasterxml.jackson.databind.type.ReferenceType;
@@ -12,12 +10,10 @@ import com.fasterxml.jackson.databind.util.NameTransformer;
 public class AtomicReferenceSerializer
     extends ReferenceTypeSerializer<AtomicReference<?>>
 {
-    private static final long serialVersionUID = 1L;
-
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Constructors, factory methods
-    /**********************************************************
+    /**********************************************************************
      */
 
     public AtomicReferenceSerializer(ReferenceType fullType, boolean staticTyping,
@@ -29,34 +25,39 @@ public class AtomicReferenceSerializer
     protected AtomicReferenceSerializer(AtomicReferenceSerializer base, BeanProperty property,
             TypeSerializer vts, JsonSerializer<?> valueSer,
             NameTransformer unwrapper,
-            JsonInclude.Include contentIncl)
+            Object suppressableValue, boolean suppressNulls)
     {
-        super(base, property, vts, valueSer, unwrapper, contentIncl);
+        super(base, property, vts, valueSer, unwrapper,
+                suppressableValue, suppressNulls);
     }
 
     @Override
-    protected AtomicReferenceSerializer withResolved(BeanProperty prop,
+    protected ReferenceTypeSerializer<AtomicReference<?>> withResolved(BeanProperty prop,
             TypeSerializer vts, JsonSerializer<?> valueSer,
-            NameTransformer unwrapper,
-            JsonInclude.Include contentIncl)
+            NameTransformer unwrapper)
     {
-        if ((_property == prop) && (contentIncl == _contentInclusion)
-                && (_valueTypeSerializer == vts) && (_valueSerializer == valueSer)
-                && (_unwrapper == unwrapper)) {
-            return this;
-        }
-        return new AtomicReferenceSerializer(this, prop, vts, valueSer, unwrapper, contentIncl);
+        return new AtomicReferenceSerializer(this, prop, vts, valueSer, unwrapper,
+                _suppressableValue, _suppressNulls);
+    }
+
+    @Override
+    public ReferenceTypeSerializer<AtomicReference<?>> withContentInclusion(Object suppressableValue,
+            boolean suppressNulls)
+    {
+        return new AtomicReferenceSerializer(this, _property, _valueTypeSerializer,
+                _valueSerializer, _unwrapper,
+                suppressableValue, suppressNulls);
     }
 
     /*
-    /**********************************************************
+    /**********************************************************************
     /* Abstract method impls
-    /**********************************************************
+    /**********************************************************************
      */
 
     @Override
-    protected boolean _isValueEmpty(AtomicReference<?> value) {
-        return value.get() == null;
+    protected boolean _isValuePresent(AtomicReference<?> value) {
+        return value.get() != null;
     }
 
     @Override

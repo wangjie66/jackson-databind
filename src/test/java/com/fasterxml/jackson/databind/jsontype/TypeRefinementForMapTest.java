@@ -9,7 +9,10 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+import com.fasterxml.jackson.databind.testutil.NoCheckSubTypeValidator;
 
+@SuppressWarnings("serial")
 public class TypeRefinementForMapTest extends BaseMapTest
 {
     interface HasUniqueId<K> {
@@ -36,7 +39,6 @@ public class TypeRefinementForMapTest extends BaseMapTest
 //        public MyHashMap<String, Item> items;
     }
 
-    @SuppressWarnings("serial")
     static class MyHashMap<K, V extends HasUniqueId<K>>
         extends LinkedHashMap<K, V>
     {
@@ -84,7 +86,8 @@ public class TypeRefinementForMapTest extends BaseMapTest
         }
     }
 
-    static class CompoundKeySerializer extends JsonSerializer<CompoundKey> {
+    static class CompoundKeySerializer extends StdSerializer<CompoundKey> {
+        public CompoundKeySerializer() { super(CompoundKey.class); }
         @Override
         public void serialize(CompoundKey compoundKey, JsonGenerator jsonGenerator, SerializerProvider serializerProvider) throws IOException {
             jsonGenerator.writeFieldName(compoundKey.getPart0() + '|' + compoundKey.getPart1());
@@ -120,8 +123,10 @@ public class TypeRefinementForMapTest extends BaseMapTest
     {
         final String TEST_INSTANCE_SERIALIZED =
                 "{\"mapProperty\":[\"java.util.HashMap\",{\"Compound|Key\":\"Value\"}]}";
-        ObjectMapper mapper = new ObjectMapper().enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL);
-
+        ObjectMapper mapper = jsonMapperBuilder()
+                .activateDefaultTyping(NoCheckSubTypeValidator.instance,
+                        DefaultTyping.NON_FINAL)
+                .build();
         TestClass testInstance = mapper.readValue(TEST_INSTANCE_SERIALIZED, TestClass.class);
         assertEquals(1, testInstance.mapProperty.size());
         Object key = testInstance.mapProperty.keySet().iterator().next();
